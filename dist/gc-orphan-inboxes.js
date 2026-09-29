@@ -16,7 +16,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { pidfilePathFor, heartbeatPathFor, legacyPidfilePathFor, legacyHeartbeatPathFor, HEARTBEAT_STALE_MS, } from './inbox-monitor.js';
+import { pidfilePathFor, heartbeatPathFor, legacyPidfilePathFor, legacyHeartbeatPathFor, replayCursorPathFor, HEARTBEAT_STALE_MS, } from './inbox-monitor.js';
 /** §8.2 staleness threshold — ≥30 days; conservative, well beyond any plausible offline period. */
 export const ORPHAN_INBOX_STALE_MS = 30 * 24 * 60 * 60 * 1000;
 /**
@@ -71,11 +71,11 @@ export function isInboxLive(inboxPath, deps, monitorStateRoot) {
 /**
  * Wire the GC for one cube dir: select orphans (excluding the just-assimilated
  * drone), then unlink each orphan's inbox plus its derived worktree-runtime
- * PID/heartbeat state. Legacy inbox-adjacent artifacts are intentionally left
- * for explicit operator cleanup: GC must never race an old binary that does
- * not participate in modern state serialization. Best-effort — every unlink is
- * swallowed per-file so a
- * single failure never aborts the sweep or blocks assimilate. Returns the paths
+ * PID, heartbeat and replay-cursor state. Legacy inbox-adjacent artifacts are
+ * intentionally left for explicit operator cleanup: GC must never race an old
+ * binary that does not participate in modern state serialization. Best-effort —
+ * every unlink is swallowed per-file so a single failure never aborts the sweep
+ * or blocks assimilate. Returns the paths
  * actually removed. Never rmdir's the cube dir (a live sibling may use it).
  */
 export function gcOrphanInboxesForCube(args) {
@@ -93,6 +93,8 @@ export function gcOrphanInboxesForCube(args) {
         const sidecars = [
             pidfilePathFor(o.inboxPath, monitorStateRoot),
             heartbeatPathFor(o.inboxPath, monitorStateRoot),
+            // The replay cursor exists only under an explicit worktree state root.
+            ...(monitorStateRoot ? [replayCursorPathFor(o.inboxPath, monitorStateRoot)] : []),
         ];
         for (const p of new Set([o.inboxPath, ...sidecars])) {
             try {

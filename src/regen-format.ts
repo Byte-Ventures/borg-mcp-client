@@ -18,8 +18,12 @@ import {
   renderRuntimeMetadataLines,
 } from './roster-render.js';
 import { formatDocumentCitations } from './document-render.js';
-import { shellEscape } from './shell-escape.js';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
+import {
+  CLAUDE_MONITOR_LOOP_FALLBACK,
+  CLAUDE_MONITOR_REARM_THEN_DRAIN,
+  claudeMonitorCommand,
+} from './claude-wake-copy.js';
 import { isBorgSession } from './launch-gate.js';
 import type { AgentKind } from './agent-runtime.js';
 import type { Decision } from 'borgmcp-shared/protocol';
@@ -87,7 +91,8 @@ export function shouldRelayPlainSessionReminder(args: {
  * Agent-branched on the existing env-agnostic signal (BORG_SESSION-style
  * `isCodexRemoteWakeEnabled`), NOT on a mutable server-recorded field:
  * - claude: arm the inbox-file tail Monitor, drain unread entries on every
- *   wake, and re-arm the Monitor after an exit or whenever none is armed.
+ *   wake, re-arm the Monitor before draining after an exit or whenever none is
+ *   armed, and fall back to `/loop` when the Monitor cannot be armed.
  * - codex: Borg's activity stream reaches the app-server remote-control inbox
  *   channel; each wake is followed by an unread-log drain. Manual full regen
  *   + drain is a degraded fallback when remote control is unavailable.
@@ -113,18 +118,15 @@ export function wakePathArming(
   if (agentKind === 'opencode') {
     return OPENCODE_WAKE_PATH_GUIDANCE;
   }
-  // client#394: the stable npm bin survives Node/nvm install-path rotation.
   // Launch-time health checks make a missing or version-skewed PATH target
   // visible instead of silently embedding a stale installation path here.
-  const monitorBin = 'borg-inbox-monitor';
-  const monitorCommand = monitorStateRoot
-    ? `${monitorBin} --state-root ${shellEscape(monitorStateRoot)} ${shellEscape(inboxPath)}`
-    : `${monitorBin} ${shellEscape(inboxPath)}`;
+  const monitorCommand = claudeMonitorCommand(inboxPath, monitorStateRoot);
   return [
     'Arm your wake path before working:',
     `1. **Inbox Monitor** (wake path) — run a persistent Monitor on \`${monitorCommand}\` so cube posts wake you in real time.`,
     '2. **On every wake** — drain `borg_read-log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
-    '3. **Monitor recovery** — re-arm the Monitor when its exit notification wakes you, and whenever you notice no Monitor is armed.',
+    `3. **Monitor recovery** — when its exit notification wakes you, or you notice no Monitor is armed: ${CLAUDE_MONITOR_REARM_THEN_DRAIN}`,
+    `4. **Monitor blocked** — ${CLAUDE_MONITOR_LOOP_FALLBACK}`,
   ].join('\n');
 }
 
@@ -190,7 +192,7 @@ export function formatLeanOrientation(args: {
         : agentKind === 'claude'
           ? [
               '\n_(`/clear` cleared Claude\'s conversation — re-arm the inbox Monitor now.)_',
-              '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, drain `borg_read-log unread_only=true`, then re-arm the Monitor._\n',
+              '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, re-arm the Monitor, then drain `borg_read-log unread_only=true`._\n',
             ].join('\n')
           : '\n_(OpenCode started a new session; Borg supplied this orientation automatically.)_\n'
       : '';

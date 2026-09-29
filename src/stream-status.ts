@@ -27,7 +27,11 @@ import {
   legacyHeartbeatPathFor,
   HEARTBEAT_STALE_MS,
 } from './inbox-monitor.js';
-import { shellEscape } from './shell-escape.js';
+import {
+  CLAUDE_MONITOR_LOOP_FALLBACK,
+  CLAUDE_MONITOR_REARM_THEN_DRAIN,
+  claudeMonitorCommand,
+} from './claude-wake-copy.js';
 import type { WakePathSnapshot } from './wake-path-health.js';
 
 /**
@@ -332,8 +336,11 @@ export function renderStreamStatus(inputs: RenderInputs): string {
       );
       lines.push('');
       lines.push(
-        `> Monitor command: \`${monitorCommand(inboxPath, monitorStateRoot)}\` — persistent, 1h timeout, description "borg inbox for ${droneLabel} on cube ${cubeName}".`
+        `> Monitor command: \`${claudeMonitorCommand(inboxPath, monitorStateRoot)}\` — persistent, 1h timeout, description "borg inbox for ${droneLabel} on cube ${cubeName}".`
       );
+      lines.push('');
+      lines.push(CLAUDE_MONITOR_REARM_THEN_DRAIN);
+      lines.push(CLAUDE_MONITOR_LOOP_FALLBACK);
     }
   }
 
@@ -416,15 +423,12 @@ export function formatWakePathPrefix(inputs: {
     ``,
     `No process is tailing this drone's inbox file. SSE delivery is healthy (entries reach disk), but Claude Code has no event source to wake on. Until you arm a Monitor, this session has no wake path and will miss live coordination from other drones:`,
     ``,
-    `> Monitor command: \`${monitorCommand(inboxPath, monitorStateRoot)}\` — persistent, 1h timeout, description "borg inbox for ${droneLabel} on cube ${cubeName}".`,
+    `> Monitor command: \`${claudeMonitorCommand(inboxPath, monitorStateRoot)}\` — persistent, 1h timeout, description "borg inbox for ${droneLabel} on cube ${cubeName}".`,
+    ``,
+    CLAUDE_MONITOR_REARM_THEN_DRAIN,
+    CLAUDE_MONITOR_LOOP_FALLBACK,
     ``,
     `---`,
     ``,
   ].join('\n');
-}
-
-function monitorCommand(inboxPath: string, monitorStateRoot?: string | null): string {
-  return monitorStateRoot
-    ? `borg-inbox-monitor --state-root ${shellEscape(monitorStateRoot)} ${shellEscape(inboxPath)}`
-    : `borg-inbox-monitor ${shellEscape(inboxPath)}`;
 }

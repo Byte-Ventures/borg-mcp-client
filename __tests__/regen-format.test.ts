@@ -964,25 +964,49 @@ describe('wakePathArming', () => {
   describe('claude', () => {
     const arming = wakePathArming('claude', inboxPath, monitorStateRoot);
 
-    it('uses the inbox Monitor without a polling wake timer', () => {
+    it('uses the inbox Monitor as the wake path', () => {
       expect(arming).toContain('`borg-inbox-monitor --state-root');
       expect(arming).toContain('inbox-monitor');
       expect(arming).toContain('--state-root');
       expect(arming).toContain(monitorStateRoot);
       expect(arming).toContain(inboxPath);
-      expect(arming).not.toContain('/loop');
       expect(arming).not.toContain('ScheduleWakeup');
     });
 
-    it('drains on every wake and re-arms an exited Monitor', () => {
+    it('drains on every wake and re-arms an exited Monitor before draining', () => {
       expect(arming).toContain('borg_read-log unread_only=true');
       expect(arming).toMatch(/if.*empty/i);
       expect(arming).toMatch(/without a full regen/i);
       expect(arming).toMatch(/liveness post/i);
       expect(arming).toContain(
-        're-arm the Monitor when its exit notification wakes you, and whenever you notice no Monitor is armed.',
+        'when its exit notification wakes you, or you notice no Monitor is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
       );
       expect(arming).toMatch(/resume prior work/i);
+      const recovery = arming.split('\n').find((line) => line.startsWith('3. '))!;
+      expect(recovery.indexOf('Re-arm the Monitor')).toBeLessThan(recovery.indexOf('drain'));
+    });
+
+    it('falls back to /loop when the Monitor cannot be armed', () => {
+      const fallback = arming.split('\n').find((line) => line.startsWith('4. '))!;
+      expect(fallback).toContain('If the Monitor cannot be armed');
+      expect(fallback).toContain('a permission request blocks, denies or times out the Monitor call');
+      expect(fallback).toContain('do not stop and do not wait for the operator');
+      expect(fallback).toContain('Invoke `/loop` with no arguments.');
+      expect(fallback).toContain(
+        'On every loop tick: re-arm the Monitor, then drain `borg_read-log unread_only=true`.',
+      );
+      expect(fallback).toContain('While a Monitor is armed, the loop is only a fallback heartbeat.');
+      expect(fallback.indexOf('re-arm the Monitor')).toBeLessThan(fallback.indexOf('then drain'));
+    });
+
+    it('is the exact four-step Claude guidance', () => {
+      expect(arming).toBe([
+        'Arm your wake path before working:',
+        `1. **Inbox Monitor** (wake path) — run a persistent Monitor on \`borg-inbox-monitor --state-root '${monitorStateRoot}' '${inboxPath}'\` so cube posts wake you in real time.`,
+        '2. **On every wake** — drain `borg_read-log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
+        '3. **Monitor recovery** — when its exit notification wakes you, or you notice no Monitor is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
+        '4. **Monitor blocked** — If the Monitor cannot be armed (a permission request blocks, denies or times out the Monitor call): do not stop and do not wait for the operator. Invoke `/loop` with no arguments. On every loop tick: re-arm the Monitor, then drain `borg_read-log unread_only=true`. While a Monitor is armed, the loop is only a fallback heartbeat.',
+      ].join('\n'));
     });
   });
 
@@ -999,6 +1023,15 @@ describe('wakePathArming', () => {
       expect(arming).not.toContain('borg-inbox-monitor');
       expect(arming).not.toContain('/loop');
       expect(arming).not.toContain('ScheduleWakeup');
+    });
+
+    it('keeps the exact Codex guidance, without the Claude Monitor steps', () => {
+      expect(arming).toBe([
+        'Required Codex wake path: Borg activity stream → inbox wake channel via app-server remote control.',
+        'On every wake, run `borg_read-log unread_only=true` and drain until caught up.',
+        'No additional scheduler setup is required.',
+        'Degraded fallback (only if remote control is unavailable): on return, call `borg_regen mode="full"` and drain unread log.',
+      ].join(' '));
     });
   });
 
@@ -1063,16 +1096,17 @@ describe('formatLeanOrientation', () => {
     expect(out.indexOf('borg_role')).toBeLessThan(out.indexOf('borg_playbook'));
   });
 
-  it('embeds the Claude Monitor-only wake path', () => {
+  it('embeds the Claude Monitor wake path with its /loop fallback', () => {
     const out = formatLeanOrientation(base);
     expect(out).toContain('inbox-monitor');
     expect(out).toContain('--state-root');
     expect(out).toContain(base.monitorStateRoot);
     expect(out).toContain('borg_read-log unread_only=true');
     expect(out).toContain(
-      're-arm the Monitor when its exit notification wakes you, and whenever you notice no Monitor is armed.',
+      'when its exit notification wakes you, or you notice no Monitor is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
     );
-    expect(out).not.toContain('/loop');
+    expect(out).toContain(wakePathArming('claude', base.inboxPath, base.monitorStateRoot));
+    expect(out).toContain('Invoke `/loop` with no arguments.');
     expect(out).not.toContain('ScheduleWakeup');
   });
 
@@ -1112,7 +1146,9 @@ describe('formatLeanOrientation', () => {
     expect(out).toContain('borg_regen mode="full"');
     expect(out).toContain('borg_read-log unread_only=true');
     expect(out).toContain('Monitor');
-    expect(out).not.toContain('/loop');
+    expect(out).toContain(
+      'call `borg_regen mode="full"`, re-arm the Monitor, then drain `borg_read-log unread_only=true`.',
+    );
     expect(out).not.toContain('ScheduleWakeup');
   });
 

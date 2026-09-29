@@ -28,12 +28,28 @@
  * The state-root form is the supported launch path. The legacy positional-only
  * form remains accepted for old hand-authored Monitor commands, and keeps its
  * inbox-adjacent sidecars for compatibility while fleets transition.
+ *
+ * Only the state-root form keeps a replay cursor (see `planArmReplay`): an entry
+ * written after the previous monitor for this inbox stopped, and before this
+ * one armed, is emitted once at arm instead of being skipped with history.
  */
 
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { lstatSync, readFileSync, realpathSync, statSync, type Stats } from 'node:fs';
-import { chmodSync, linkSync, mkdirSync, unlinkSync, writeFileSync } from './guarded-fs.js';
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  statSync,
+  writeSync,
+  type Stats,
+} from 'node:fs';
+import { chmodSync, linkSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from './guarded-fs.js';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -58,6 +74,10 @@ export class RecentLineDeduper {
     if (!Number.isInteger(cap) || cap < 1) {
       throw new Error('cap must be a positive integer');
     }
+  }
+
+  has(line: string): boolean {
+    return this.seen.has(line);
   }
 
   remember(line: string): boolean {
@@ -149,6 +169,250 @@ export function seedDeduperFromInboxTail(
   for (const line of lines.slice(-maxLines)) {
     if (formatEventLine(line) !== null) deduper.remember(line);
   }
+}
+
+// ---- Arm replay cursor (6.0.2): close the stop→re-arm gap ----
+// A monitor that arms skips history, so an entry written after the previous
+// monitor stopped and before this one armed was never announced. The holder
+// therefore persists, under its explicit state root, which entry line it
+// handled last, and the next arm replays the entry lines written after it.
+//
+// The cursor is anchored to line CONTENT, not a byte offset: the stream owner
+// trims the inbox by rename (log-stream.ts trimInboxFileToRecentLines), which
+// invalidates every offset. It stores a SHA-256 of the line rather than the
+// line, so no message text is copied into the worktree. When the anchored line
+// has been trimmed away, the line's own timestamp bounds the replay instead.
+// `sinceMs` is the arm boundary of the monitor that wrote the cursor; entries
+// older than it were history to that monitor and are never replayed.
+//
+// Delivery is at least once: a line is emitted before the cursor moves past
+// it, so a crash between the two re-emits that one line on the next arm, and
+// never drops it. A duplicate wake only drains an empty unread log.
+
+/** At most this many entries are replayed at arm; older ones get one notice line. */
+export const ARM_REPLAY_CAP = 20;
+const CURSOR_MAX_BYTES = 1024;
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+
+export interface ReplayCursor {
+  /** SHA-256 (hex) of the last handled entry line; null = no entry handled yet. */
+  lineSha256: string | null;
+  /** That line's ISO timestamp; null exactly when `lineSha256` is null. */
+  lineTs: string | null;
+  /** Arm boundary (epoch ms) of the monitor that wrote this cursor. */
+  sinceMs: number;
+}
+
+export interface ArmReplayPlan {
+  /** Inbox lines that are history at this arm and are never emitted. */
+  history: Set<string>;
+  /** Entry lines to emit once as tail reaches them, oldest first. */
+  replay: string[];
+  /** Replay candidates beyond ARM_REPLAY_CAP that were folded into history. */
+  omitted: number;
+  /** Cursor to persist at arm when none was usable; null keeps the stored one. */
+  cursorAtArm: ReplayCursor | null;
+}
+
+export function replayCursorPathFor(inboxPath: string, stateRoot: string): string {
+  return join(resolve(stateRoot), `${monitorStateKey(inboxPath)}.monitor.cursor`);
+}
+
+export function cursorForLine(line: string, sinceMs: number): ReplayCursor | null {
+  const match = ENTRY_LINE_RE.exec(line);
+  if (!match) return null;
+  return {
+    lineSha256: createHash('sha256').update(line, 'utf8').digest('hex'),
+    lineTs: match[1],
+    sinceMs,
+  };
+}
+
+/** Strict decode of a stored cursor; anything unexpected is null (fresh arm). */
+export function parseReplayCursor(raw: string): ReplayCursor | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort().join(',');
+  if (keys !== 'line_sha256,line_ts,since_ms,v' || record.v !== 1) return null;
+  const { line_sha256: hash, line_ts: ts, since_ms: sinceMs } = record;
+  if (typeof sinceMs !== 'number' || !Number.isSafeInteger(sinceMs) || sinceMs < 0) return null;
+  if (hash === null && ts === null) return { lineSha256: null, lineTs: null, sinceMs };
+  if (typeof hash !== 'string' || !SHA256_HEX_RE.test(hash)) return null;
+  if (typeof ts !== 'string' || !Number.isFinite(Date.parse(ts))) return null;
+  return { lineSha256: hash, lineTs: ts, sinceMs };
+}
+
+export function serializeReplayCursor(cursor: ReplayCursor): string {
+  return `${JSON.stringify({
+    v: 1,
+    line_sha256: cursor.lineSha256,
+    line_ts: cursor.lineTs,
+    since_ms: cursor.sinceMs,
+  })}\n`;
+}
+
+/**
+ * Read the stored cursor. It must be a regular file owned by this user, mode
+ * 0600 and small; it is opened without following a symlink. A missing file is
+ * null; every other refusal is reported so the caller can say why it did not
+ * replay.
+ */
+export function readReplayCursor(cursorPath: string): { cursor: ReplayCursor | null; problem: string | null } {
+  let fd: number;
+  try {
+    fd = openSync(cursorPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') return { cursor: null, problem: null };
+    return { cursor: null, problem: `cannot open (${err?.code ?? 'error'})` };
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return { cursor: null, problem: 'not a regular file' };
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+      return { cursor: null, problem: 'unexpected owner' };
+    }
+    if ((stat.mode & 0o777) !== 0o600) return { cursor: null, problem: 'unexpected mode' };
+    if (stat.size > CURSOR_MAX_BYTES) return { cursor: null, problem: 'too large' };
+    const buffer = Buffer.alloc(CURSOR_MAX_BYTES + 1);
+    let length = 0;
+    for (;;) {
+      const read = readSync(fd, buffer, length, buffer.length - length, null);
+      if (read === 0) break;
+      length += read;
+      if (length > CURSOR_MAX_BYTES) return { cursor: null, problem: 'too large' };
+    }
+    const cursor = parseReplayCursor(buffer.subarray(0, length).toString('utf8'));
+    return cursor ? { cursor, problem: null } : { cursor: null, problem: 'malformed' };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Replace the cursor atomically: a fresh 0600 temp file created exclusively
+ * (never through an existing path or symlink), flushed, then renamed over the
+ * cursor. Renaming replaces a planted symlink itself, never its target.
+ */
+export function writeReplayCursor(cursorPath: string, cursor: ReplayCursor): void {
+  const tmp = `${cursorPath}.tmp.${process.pid}.${randomBytes(6).toString('hex')}`;
+  const fd = openSync(
+    tmp,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    try {
+      writeSync(fd, serializeReplayCursor(cursor));
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, cursorPath);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* best-effort temp cleanup */
+    }
+    throw err;
+  }
+}
+
+function entryTimestampMs(line: string): number | null {
+  const match = ENTRY_LINE_RE.exec(line);
+  if (!match) return null;
+  const ms = Date.parse(match[1]);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * PURE: decide, from the inbox contents read at arm and the stored cursor,
+ * which lines are history and which are replayed.
+ *
+ * - No cursor (a fresh state root, or an unusable cursor): every line is
+ *   history, exactly the previous skip-history arm, and the cursor to persist
+ *   marks the last entry line (or none) with this arm's boundary.
+ * - Cursor line found: replay the entry lines after its first occurrence.
+ * - Cursor line trimmed away: replay the entry lines timestamped at or after
+ *   it. Equal timestamps are replayed, never dropped.
+ * - A cursor with no line: replay the entry lines at or after its boundary.
+ *
+ * In every case a replayed line is at or after the cursor's `sinceMs`, is not
+ * a copy of a line at or before the cursor, and appears once. Only the newest
+ * ARM_REPLAY_CAP are replayed; the rest are counted in `omitted`.
+ */
+export function planArmReplay(
+  inboxRaw: string,
+  cursor: ReplayCursor | null,
+  armSinceMs: number,
+  cap = ARM_REPLAY_CAP,
+): ArmReplayPlan {
+  if (!Number.isInteger(cap) || cap < 1) throw new Error('cap must be a positive integer');
+  const lines = inboxRaw.split(/\r?\n/);
+  if (lines.at(-1) === '') lines.pop();
+  const entries = lines.filter((line) => ENTRY_LINE_RE.test(line));
+
+  if (!cursor) {
+    const last = entries.at(-1);
+    return {
+      history: new Set(lines),
+      replay: [],
+      omitted: 0,
+      cursorAtArm: (last ? cursorForLine(last, armSinceMs) : null) ?? { lineSha256: null, lineTs: null, sinceMs: armSinceMs },
+    };
+  }
+
+  let after: string[];
+  let before: string[];
+  if (cursor.lineSha256 === null) {
+    before = [];
+    after = entries;
+  } else {
+    const index = entries.findIndex(
+      (line) => createHash('sha256').update(line, 'utf8').digest('hex') === cursor.lineSha256,
+    );
+    if (index >= 0) {
+      before = entries.slice(0, index + 1);
+      after = entries.slice(index + 1);
+    } else {
+      const floor = Date.parse(cursor.lineTs ?? '');
+      before = entries.filter((line) => (entryTimestampMs(line) ?? -Infinity) < floor);
+      after = entries.filter((line) => (entryTimestampMs(line) ?? -Infinity) >= floor);
+    }
+  }
+
+  const seenBefore = new Set(before);
+  const candidates: string[] = [];
+  const unique = new Set<string>();
+  for (const line of after) {
+    const ts = entryTimestampMs(line);
+    if (ts === null || ts < cursor.sinceMs) continue;
+    if (seenBefore.has(line) || unique.has(line)) continue;
+    unique.add(line);
+    candidates.push(line);
+  }
+  const omitted = Math.max(0, candidates.length - cap);
+  const replay = candidates.slice(omitted);
+  const replaySet = new Set(replay);
+  return {
+    history: new Set(lines.filter((line) => !replaySet.has(line))),
+    replay,
+    omitted,
+    cursorAtArm: null,
+  };
+}
+
+export function formatReplayOmittedLine(omitted: number): string {
+  return (
+    `borg-inbox-monitor: ${omitted} older ${omitted === 1 ? 'entry' : 'entries'} arrived while no monitor was armed ` +
+    'and are not shown; drain `borg_read-log unread_only=true`.'
+  );
 }
 
 // ---- gh#822 subclass B: hung-tail (alive-but-not-following) self-heal ----
@@ -498,7 +762,8 @@ export const HEARTBEAT_STALE_MS = 5 * MONITOR_TICK_MS; // SLI: present-but-stale
  * FORWARD — CR build-gate item 3: NOT `-n 0`, which starts at the new EOF and
  * skips exactly the bytes a stalled tail dropped).
  */
-export function tailArgsFor(inboxPath: string, fromByteOffset: number | null): string[] {
+export function tailArgsFor(inboxPath: string, fromByteOffset: number | null | 'start'): string[] {
+  if (fromByteOffset === 'start') return ['-F', '-n', '+1', inboxPath];
   return fromByteOffset === null
     ? ['-F', '-n', '0', inboxPath]
     : ['-F', '-c', `+${fromByteOffset + 1}`, inboxPath];
@@ -914,11 +1179,13 @@ function main(): void {
   // Node's fs.watch is unreliable across file rotation; subprocess
   // tail matches the prior kickoff-Monitor shape (`tail -F`) so the
   // wire behavior is identical — only the per-line projection changes.
-  // `-n 0` skips backfilling history so fresh sessions don't replay
-  // old entries on every restart.
+  // The legacy positional form uses `-n 0` to skip history. The state-root
+  // form reads the file from its first line and classifies every line against
+  // the arm plan, so nothing written between the plan's read and tail's open
+  // is skipped.
   const monitorArmTimeMs = Date.now();
+  const armSinceMs = monitorArmTimeMs - INBOX_ARM_TIMESTAMP_SKEW_MS;
   const deduper = new RecentLineDeduper();
-  seedDeduperFromInboxTail(inboxPath, deduper);
 
   // gh#822: stat-anchored offset — seed to the inbox SIZE at arm (EOF, matching
   // `tail -F -n 0`'s skip-history) so a non-empty inbox does NOT false-stall on
@@ -928,12 +1195,81 @@ function main(): void {
   let shuttingDown = false;
   let currentTail: ReturnType<typeof spawn> | null = null;
 
-  // Spawn (or re-spawn) the tail. `fromByteOffset === null` → fresh `-n 0`
-  // (skip history, the arm path); otherwise byte-seek `-c +<N+1>` to re-read the
+  let plan: ArmReplayPlan | null = null;
+  const cursorPath = stateRoot ? replayCursorPathFor(inboxPath, stateRoot) : null;
+  if (cursorPath) {
+    let raw = '';
+    try {
+      raw = readFileSync(inboxPath, 'utf-8');
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') {
+        console.error(`borg-inbox-monitor: cannot read inbox for arm replay: ${err?.message ?? String(err)}`);
+      }
+    }
+    const stored = readReplayCursor(cursorPath);
+    if (stored.problem) {
+      console.error(`borg-inbox-monitor: ignoring replay cursor (${stored.problem}); nothing is replayed at this arm`);
+    }
+    plan = planArmReplay(raw, stored.cursor, armSinceMs);
+    if (plan.cursorAtArm) persistCursor(plan.cursorAtArm);
+    if (plan.omitted > 0) console.log(formatReplayOmittedLine(plan.omitted));
+  } else {
+    seedDeduperFromInboxTail(inboxPath, deduper);
+  }
+  const replayPending = new Set(plan?.replay ?? []);
+
+  // Cursor writes are advisory: a failure is reported once and never stops
+  // the wake path. Only the lock holder writes, and it stops at shutdown so a
+  // successor's cursor is not overwritten by a late line.
+  let cursorWriteFailed = false;
+  function persistCursor(cursor: ReplayCursor): void {
+    if (!cursorPath || shuttingDown) return;
+    try {
+      writeReplayCursor(cursorPath, cursor);
+    } catch (err) {
+      if (!cursorWriteFailed) {
+        cursorWriteFailed = true;
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`borg-inbox-monitor: cannot write replay cursor: ${message}`);
+      }
+    }
+  }
+
+  // State-root mode: one decision per inbox line, in file order. Every entry
+  // line tail delivers proves the tail is following, so each one re-anchors
+  // the stall detector, including history the plan skips.
+  const handleStateRootLine = (line: string): void => {
+    if (formatEventLine(line) === null) return;
+    markDelivered();
+    if (replayPending.has(line)) {
+      replayPending.delete(line);
+      if (deduper.remember(line)) emit(line);
+      persistCursor(cursorForLine(line, armSinceMs)!);
+      return;
+    }
+    if (plan!.history.has(line) || deduper.has(line)) return;
+    deduper.remember(line);
+    if (isInboxLineAtOrAfterArm(line, monitorArmTimeMs)) emit(line);
+    persistCursor(cursorForLine(line, armSinceMs)!);
+  };
+
+  const emit = (line: string): void => {
+    console.log(formatCubeActivityWakeMessage(formatEventLine(line)!));
+  };
+
+  // Delivered → the tail is current; re-anchor the offset to the live file
+  // size (stat-anchored = rotation-robust) and clear any stall streak.
+  const markDelivered = (): void => {
+    stall = { lastEmittedOffset: inboxSizeOf(inboxPath), grewSince: null };
+  };
+
+  // Spawn (or re-spawn) the tail. `'start'` → the whole file (the state-root
+  // arm, classified by the arm plan); `null` → fresh `-n 0` (skip history, the
+  // legacy arm path); otherwise byte-seek `-c +<N+1>` to re-read the
   // un-emitted bytes a stalled tail dropped (CR item 3 — NOT `-n 0`, which would
   // skip exactly those bytes). Lines route through the SHARED deduper so an
   // overlap on respawn can't double-emit an already-seen line.
-  const spawnTail = (fromByteOffset: number | null): void => {
+  const spawnTail = (fromByteOffset: number | null | 'start'): void => {
     const tail = spawn('tail', tailArgsFor(inboxPath, fromByteOffset), {
       stdio: ['ignore', 'pipe', 'inherit'],
     });
@@ -948,12 +1284,14 @@ function main(): void {
 
     const rl = createInterface({ input: tail.stdout, crlfDelay: Infinity });
     rl.on('line', (line) => {
+      if (plan) {
+        handleStateRootLine(line);
+        return;
+      }
       const pretty = formatFreshEventLine(line, deduper, true, monitorArmTimeMs);
       if (pretty !== null) {
         console.log(pretty);
-        // Delivered → the tail is current; re-anchor the offset to the live
-        // file size (stat-anchored = rotation-robust) and clear any stall streak.
-        stall = { lastEmittedOffset: inboxSizeOf(inboxPath), grewSince: null };
+        markDelivered();
       }
     });
 
@@ -977,7 +1315,7 @@ function main(): void {
     });
   };
 
-  spawnTail(null);
+  spawnTail(plan ? 'start' : null);
 
   // gh#822: holder tick — (1) touch the heartbeat sidecar (proves node liveness
   // even in a quiet cube; the SLI + the deferred node-wedge reaper read its

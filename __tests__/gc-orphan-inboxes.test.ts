@@ -11,6 +11,7 @@ import {
 import {
   pidfilePathFor,
   heartbeatPathFor,
+  replayCursorPathFor,
   legacyPidfilePathFor,
   HEARTBEAT_STALE_MS,
 } from '../src/inbox-monitor';
@@ -159,6 +160,7 @@ describe('gh#793 gcOrphanInboxesForCube — triplet deletion + self-exclusion', 
       logPath('dead'),
       pidfilePathFor(logPath('dead'), root),
       heartbeatPathFor(logPath('dead'), root),
+      replayCursorPathFor(logPath('dead'), root),
     ]);
   });
 
