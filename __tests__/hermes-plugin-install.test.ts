@@ -27,7 +27,9 @@ import {
   BACKUPS_KEPT,
   HERMES_PLUGIN_FILES,
   HERMES_PLUGIN_NAME,
+  HermesPluginError,
   activateHermesPlugin,
+  installCommand,
   configSetText,
   defaultHermesPluginDeps,
   managedWrites,
@@ -619,7 +621,7 @@ describe('worktree from the representative binding state', () => {
     expect(err.join('')).toContain('borg representative prepare');
     err = [];
     expect(await install({}, deps({ worktrees: ['/a', '/b'], isTTY: () => false }))).toBe(1);
-    expect(err.join('')).toContain('Several representative worktrees are prepared. Run install with the one to use:');
+    expect(err.join('')).toContain('Several representative worktrees are prepared.\nRun install with the one to use:\n  borg representative hermes-plugin install');
     err = [];
     expect(await install({ worktree: '/c' }, deps({ worktrees: ['/a', '/b'] }))).toBe(1);
     expect(err.join('')).toContain('/c is not a prepared representative worktree');
@@ -1183,10 +1185,10 @@ describe('CR round 5 probes (review bc13269c)', () => {
 
   it('F8: a --no-restart hint and an uninstall rerun keep the selected home', async () => {
     expect(await install({ noRestart: true })).toBe(0);
-    expect(out.join('')).toContain(`Run \`borg representative hermes-plugin install --hermes-home '${home}'\` without --no-restart`);
+    expect(out.join('')).toContain(`To finish it, run without --no-restart:\n  borg representative hermes-plugin install --hermes-home '${home}'\n`);
     out = [];
     expect(await runHermesPluginUninstall({ hermesHome: home, dryRun: false, noRestart: true }, deps())).toBe(0);
-    expect(out.join('')).toContain(`Run \`borg representative hermes-plugin uninstall --hermes-home '${home}'\` without --no-restart`);
+    expect(out.join('')).toContain(`To finish it, run without --no-restart:\n  borg representative hermes-plugin uninstall --hermes-home '${home}'\n`);
   });
 });
 
@@ -1489,6 +1491,59 @@ describe('6.0.1 Security boundary: failure text is cleaned (dispatch 1f772056)',
     for (const line of lines.filter((line) => !commandLines.includes(line))) {
       expect(line, JSON.stringify(line)).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/);
     }
+  });
+});
+
+describe('6.0.1 round 5: commands travel as structure, never inside display text (dispatch f7daecc9)', () => {
+  /** The commands printed after a refusal: everything after the display text, one per "  borg representative" block. */
+  const printedCommands = (text: string) => {
+    const start = text.indexOf('\n  borg representative ');
+    if (start < 0) return [];
+    return text.slice(start + 1).split(/\n(?=  borg representative )/).map((block) => block.replace(/\n$/, '').replace(/^  /, ''));
+  };
+
+  it('CR F3: a --hermes-home with a newline, ESC and U+202E: the retry parses back exactly, and the display text is clean', async () => {
+    const hostileHome = join(root, 'home\n\u001bX\u202eY');
+    renameSync(home, hostileHome);
+    home = hostileHome;
+    const second = join(root, 'worktrees', 'second'); mkdirSync(second, { recursive: true });
+    expect(await install({ sessionKey: DM }, deps({ worktrees: [worktree, second], isTTY: () => false }))).toBe(1);
+    const text = err.join('');
+    const commands = printedCommands(text);
+    expect(commands.map((command) => parseRepresentativeArgs(shellWords(command).slice(2)))).toEqual([worktree, second].map((path) => ({
+      ok: true, command: { action: 'hermes-plugin-install', hermesHome: hostileHome, worktree: path, sessionKey: DM, dryRun: false, noRestart: false },
+    })));
+    const display = text.slice(0, text.indexOf('\n  borg representative '));
+    expect(display).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/);
+  });
+
+  it('structural: no display message built by the installer contains a retry command', async () => {
+    // Every refusal that carries commands: several worktrees, and an unconfirmed DM.
+    const second = join(root, 'worktrees', 'second'); mkdirSync(second, { recursive: true });
+    writeSessions({ [DM]: {}, 'agent:main:discord:dm:42': {} });
+    const newline = join(root, 'nl\nwt'); mkdirSync(newline, { recursive: true });
+    for (const run of [
+      // Several worktrees plus a not-selectable one: its display text must not follow the commands.
+      () => install({ sessionKey: DM }, deps({ worktrees: [worktree, newline, second], isTTY: () => false })),
+      () => install({}, deps({ isTTY: () => false })),
+    ]) {
+      err = [];
+      expect(await run()).toBe(1);
+      const text = err.join('');
+      const display = text.slice(0, text.indexOf('\n  borg representative '));
+      expect(display).not.toContain('hermes-plugin install --');
+      const commands = printedCommands(text);
+      expect(commands.length).toBeGreaterThan(0);
+      // After the display text comes nothing but the commands, each on its own "  " block.
+      expect(text.slice(display.length + 1)).toBe(commands.map((command) => `  ${command}\n`).join(''));
+    }
+    // Source: a built command is never interpolated into a display string.
+    const source = readFileSync(join(process.cwd(), 'src', 'hermes-plugin-install.ts'), 'utf8');
+    expect(source).not.toMatch(/\$\{(?:installCommand|uninstallCommand|retry|rerun)\b/);
+    // The HermesPluginError message itself never holds a command; commands are its own field.
+    const error = new HermesPluginError('display text', [installCommand({ hermesHome: home, sessionKey: DM })]);
+    expect(error.message).toBe('display text');
+    expect(error.commands).toEqual([`borg representative hermes-plugin install --hermes-home '${home}' --session-key '${DM}'`]);
   });
 });
 

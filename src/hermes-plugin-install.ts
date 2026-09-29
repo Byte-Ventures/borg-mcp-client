@@ -184,23 +184,28 @@ export function defaultHermesPluginDeps(): HermesPluginDeps {
 
 export class HermesPluginError extends Error {
   /**
-   * @param commands retry commands inside the message. They are printed with
-   *   their exact bytes (shell-quoted, for an exact round-trip); every other
-   *   line is display text and is cleaned when printed.
+   * @param message display text only; no command is ever embedded in it.
+   * @param commands exact shell-quoted commands, printed verbatim after the
+   *   message on lines of their own, so an argument's bytes survive (a newline
+   *   inside a quoted path included).
    */
   constructor(message: string, readonly commands: readonly string[] = []) {
     super(message);
   }
 }
 
+/** Display text: each line cleaned of control, C1 and bidi characters (config values and Hermes replies can carry them). */
+function printableMessage(message: string): string {
+  return message.split('\n').map((line) => printableUntrusted(line, 4096)).join('\n');
+}
+
 /**
- * Stderr text from an error: each line cleaned of control, C1 and bidi
- * characters (a config value or a Hermes reply can carry them), except the
- * error's own retry commands, which keep their exact shell-quoted bytes.
+ * The one printer for text with commands: the cleaned display text, then each
+ * command verbatim on its own lines. Nothing is joined into, or matched
+ * inside, the display text.
  */
-function printableMessage(message: string, commands: readonly string[] = []): string {
-  const exact = new Set(commands);
-  return message.split('\n').map((line) => (exact.has(line.trim()) ? line : printableUntrusted(line, 4096))).join('\n');
+function withCommands(message: string, commands: readonly string[]): string {
+  return `${printableMessage(message)}\n${commands.map((command) => `  ${command}\n`).join('')}`;
 }
 
 function errnoCode(error: unknown): string | undefined {
@@ -905,12 +910,10 @@ async function planSessions(
 
 /** Without a terminal the conversation is never chosen: refused with the exact commands. */
 function refuseUnconfirmedSession(candidates: SessionChoice[], retry: (sessionKey: string) => string): never {
-  const commands = candidates.map((candidate) => retry(candidate.sessionKey));
   throw new HermesPluginError(
     `Borg does not choose the conversation to wake without your confirmation. Gateway DM conversations found:\n` +
-      `${listCandidates(candidates)}Run install with the one that is yours, for example:\n` +
-      commands.map((command) => `  ${command}\n`).join('').trimEnd(),
-    commands,
+      `${listCandidates(candidates)}Run install with the one that is yours, for example:`,
+    candidates.map((candidate) => retry(candidate.sessionKey)),
   );
 }
 
@@ -977,12 +980,11 @@ async function selectPlan(
     throw new HermesPluginError(`No prepared worktree can be installed; nothing was changed:\n${notSelectable.trimEnd()}`);
   }
   if (validated.worktrees.length > 1 && !interactive) {
-    const commands = validated.worktrees.map((path) => retry.worktree(path));
     throw new HermesPluginError(
-      `Several representative worktrees are prepared. Run install with the one to use:\n` +
-        commands.map((command) => `  ${command}\n`).join('') +
-        (notSelectable ? `Not selectable:\n${notSelectable}` : '').trimEnd(),
-      commands,
+      `Several representative worktrees are prepared.\n` +
+        (notSelectable ? `Not selectable:\n${notSelectable}` : '') +
+        'Run install with the one to use:',
+      validated.worktrees.map((path) => retry.worktree(path)),
     );
   }
   let worktree: string;
@@ -1359,7 +1361,7 @@ async function finishGeneration(
   rerun: string,
 ): Promise<number> {
   if (noRestart) {
-    deps.stdout(`Restart skipped (--no-restart); the activation stays pending. Run \`${rerun}\` without --no-restart to finish it.\n`);
+    deps.stdout(withCommands('Restart skipped (--no-restart); the activation stays pending. To finish it, run without --no-restart:', [rerun]));
     return 0;
   }
   const outcome = await activateHosts(cli, deps, verb, record.desired.gateway_pid);
@@ -1368,7 +1370,7 @@ async function finishGeneration(
     else await deps.activation.write({ ...record, activated: record.desired.id });
     return 0;
   }
-  deps.stdout(`The activation stays pending; after that, rerun \`${rerun}\` to finish it.\n`);
+  deps.stdout(withCommands('The activation stays pending; after that, finish it with:', [rerun]));
   return outcome === 'failed' ? 1 : 0;
 }
 
@@ -1572,7 +1574,7 @@ async function reportFailure(
 
 function failure(error: unknown, deps: HermesPluginDeps, prefix: string): number {
   const message = error instanceof HermesPluginError ? error.message : `${prefix} failed: ${error instanceof Error ? error.message : String(error)}`;
-  deps.stderr(`${printableMessage(message, error instanceof HermesPluginError ? error.commands : [])}\n`);
+  deps.stderr(withCommands(message, error instanceof HermesPluginError ? error.commands : []));
   return 1;
 }
 

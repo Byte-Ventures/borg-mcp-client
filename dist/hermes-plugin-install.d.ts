@@ -63,9 +63,10 @@ export declare function defaultHermesPluginDeps(): HermesPluginDeps;
 export declare class HermesPluginError extends Error {
     readonly commands: readonly string[];
     /**
-     * @param commands retry commands inside the message. They are printed with
-     *   their exact bytes (shell-quoted, for an exact round-trip); every other
-     *   line is display text and is cleaned when printed.
+     * @param message display text only; no command is ever embedded in it.
+     * @param commands exact shell-quoted commands, printed verbatim after the
+     *   message on lines of their own, so an argument's bytes survive (a newline
+     *   inside a quoted path included).
      */
     constructor(message: string, commands?: readonly string[]);
 }
