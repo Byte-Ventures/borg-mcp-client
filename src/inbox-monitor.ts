@@ -1241,7 +1241,10 @@ function main(): void {
   // Cursor writes are advisory: a failure is reported once and never stops
   // the wake path. After a failed write the stored cursor is removed (best
   // effort), so the next arm falls back to skip-history instead of replaying
-  // from a stale position; a later successful write restores it. Only the lock
+  // from a stale position; a later successful write restores it. When it
+  // cannot be removed, the next arm refuses an unusable cursor (skip-history),
+  // but replays from a valid one's stored position, which can only repeat
+  // entries, never skip them. Only the lock
   // holder writes, and it stops at shutdown so a successor's cursor is not
   // overwritten by a late line.
   const cursorPath = stateRoot ? replayCursorPathFor(inboxPath, stateRoot) : null;
@@ -1254,13 +1257,13 @@ function main(): void {
       try {
         unlinkSync(cursorPath);
       } catch {
-        /* absent, or not removable: the next arm refuses it and skips history */
+        /* absent, or not removable: the next arm refuses an unusable cursor, or replays (repeats only) from a valid one */
       }
       if (!cursorWriteFailed) {
         cursorWriteFailed = true;
         const message = err instanceof Error ? err.message : String(err);
         console.error(
-          `borg-inbox-monitor: cannot write replay cursor (${message}); delivery continues, and the next arm skips history`
+          `borg-inbox-monitor: cannot write replay cursor (${message}); delivery continues, and the next arm skips history or, if a stored cursor remains, repeats entries`
         );
       }
     }
