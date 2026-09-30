@@ -1229,8 +1229,8 @@ describe('formatLeanOrientation', () => {
         droneLabel: 'security-auditor-d5cb86ae',
         roleName: '界'.repeat(48),
         inboxPath:
-          '/Users/theodorstorm/.config/borgmcp/inboxes/326ea162-5d46-4920-9bfb-45686c4c2e7d/d5cb86ae-0000-4000-8000-000000000000.log',
-        monitorStateRoot: '/Users/theodorstorm/.borg/worktrees/borg-mcp/security-auditor/.borgmcp/inbox-monitor',
+          '/Users/someoperator/.config/borgmcp/inboxes/326ea162-5d46-4920-9bfb-45686c4c2e7d/d5cb86ae-0000-4000-8000-000000000000.log',
+        monitorStateRoot: '/Users/someoperator/.borg/worktrees/borg-mcp/security-auditor/.borgmcp/inbox-monitor',
         agentKind: 'claude',
         source: 'clear',
       });
