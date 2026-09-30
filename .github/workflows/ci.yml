@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Run by hand against main before a tag when a merge started no push run.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,6 +26,9 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24.19.0
+
+      - name: Scan public source
+        run: npm run verify:public-source
 
       - name: Test release policy
         run: |
