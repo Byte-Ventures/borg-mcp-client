@@ -5,7 +5,7 @@
 // with vi.fn() stubs. buildDefaultLaunchAllDeps() (added in launch-all-cmd
 // wiring / Phase 4) wires the real-IO production modules.
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { mkdirSync, writeFileSync, unlinkSync } from './guarded-fs.js';
 import { createInterface } from 'node:readline/promises';
@@ -38,6 +38,8 @@ export interface LaunchAllDeps {
    * seam completes that (real: spawnSync stdio:'inherit').
    */
   attachInteractive: (cmd: string, args: string[]) => void;
+  /** Start a detached terminal; resolves on spawn, without waiting for its session to exit. */
+  spawnDetached: (cmd: string, args: string[]) => Promise<void>;
   /** Absolute path of the current working directory. */
   cwd: () => string;
   /** True iff the path exists on disk. */
@@ -73,6 +75,7 @@ export interface LaunchAllDeps {
    * Probe ONE saved seat's server-side liveness using ITS OWN token (gh#877
    * reuse via seat-probe.ts). Lets launch-all skip evicted seats instead
    * of relaunching them (which silently re-mints a fresh drone — resurrection).
+   * Clears stale seat.isHumanSeat, then refreshes it from a successful identity response.
    */
   probeSeat: (
     seat: ActiveCube,
@@ -114,6 +117,14 @@ export function buildDefaultLaunchAllDeps(): LaunchAllDeps {
     attachInteractive: (cmd, args) => {
       spawnSync(cmd, args, { stdio: 'inherit' });
     },
+    spawnDetached: (cmd, args) => new Promise<void>((resolve, reject) => {
+      const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+      child.once('error', reject);
+      child.once('spawn', () => {
+        child.unref();
+        resolve();
+      });
+    }),
     cwd: () => process.cwd(),
     pathExists: (p) => existsSync(p),
     homedir: () => borgHomeRoot(),
@@ -164,7 +175,14 @@ export function buildDefaultLaunchAllDeps(): LaunchAllDeps {
       }
       await preflightBorgServerTag(seat.apiUrl, trust.fetchImpl);
     },
-    probeSeat: (seat) => defaultProbeSeat(seat),
+    probeSeat: (seat) => {
+      // Saved role metadata may predate a reassignment on another machine.
+      delete seat.isHumanSeat;
+      return defaultProbeSeat(seat, (identity) => {
+        // Refresh routing metadata in memory; the probe does not rewrite saved seats.
+        if (typeof identity.is_human_seat === 'boolean') seat.isHumanSeat = identity.is_human_seat;
+      });
+    },
     getCliPreferenceForPath: (projectPath) => getProjectCliPreferenceForPath(projectPath),
     readAllProjectIdentities: () => cubesReadAllProjectIdentities(),
     findProjectRoot: (dir) => findProjectRoot(dir),

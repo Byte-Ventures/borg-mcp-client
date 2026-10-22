@@ -140,6 +140,9 @@ export default function setup(): () => void {
     const after = scanForMarkers(protectedConfig);
     const grew = Object.keys(after).filter((marker) => after[marker] > markers[marker]);
     if (changes.length > 0 || grew.length > 0) {
+      // Vitest 4 reports teardown errors without necessarily changing its exit status.
+      // A detected operator-state mutation must fail the process as well as the report.
+      process.exitCode = 1;
       throw new Error(`A test wrote the real Borg config ${protectedConfig}: ` +
         [...changes, ...grew.map((marker) => `new test marker ${marker} (${markers[marker]} -> ${after[marker]})`)].join(', ') +
         '. Every test must use an explicit temporary root.');

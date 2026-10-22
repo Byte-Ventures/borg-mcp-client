@@ -16,6 +16,8 @@ export interface LaunchAllDeps {
      * seam completes that (real: spawnSync stdio:'inherit').
      */
     attachInteractive: (cmd: string, args: string[]) => void;
+    /** Start a detached terminal; resolves on spawn, without waiting for its session to exit. */
+    spawnDetached: (cmd: string, args: string[]) => Promise<void>;
     /** Absolute path of the current working directory. */
     cwd: () => string;
     /** True iff the path exists on disk. */
@@ -56,6 +58,7 @@ export interface LaunchAllDeps {
      * Probe ONE saved seat's server-side liveness using ITS OWN token (gh#877
      * reuse via seat-probe.ts). Lets launch-all skip evicted seats instead
      * of relaunching them (which silently re-mints a fresh drone — resurrection).
+     * Clears stale seat.isHumanSeat, then refreshes it from a successful identity response.
      */
     probeSeat: (seat: ActiveCube) => Promise<SeatStatus>;
     /** Saved CLI preference for a worktree path (launch.json). */

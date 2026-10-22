@@ -127,6 +127,9 @@ export declare function getRoleInfoByName(sessionToken: string, apiUrl: string, 
 }>;
 export declare function whoami(active: ActiveCube, opts?: {
     signal?: AbortSignal;
+    onRoleIdentity?: (identity: {
+        is_human_seat?: boolean;
+    }) => void;
 }): Promise<{
     cube_id: string;
     cube_name: string;

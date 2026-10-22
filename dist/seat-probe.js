@@ -43,9 +43,12 @@ export function isTransportFailure(err) {
  * but `evicted`; the launch path treats every non-`evicted`/non-terminal cause as
  * fail-OPEN.
  */
-export async function defaultProbeSeat(seat) {
+export async function defaultProbeSeat(seat, onIdentity) {
     try {
-        await whoami(seat);
+        if (onIdentity)
+            await whoami(seat, { onRoleIdentity: onIdentity });
+        else
+            await whoami(seat);
         return 'live';
     }
     catch (err) {

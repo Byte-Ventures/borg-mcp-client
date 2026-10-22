@@ -36,5 +36,7 @@ export declare function isTransportFailure(err: unknown): boolean;
  * but `evicted`; the launch path treats every non-`evicted`/non-terminal cause as
  * fail-OPEN.
  */
-export declare function defaultProbeSeat(seat: ActiveCube): Promise<SeatStatus>;
+export declare function defaultProbeSeat(seat: ActiveCube, onIdentity?: (identity: {
+    is_human_seat?: boolean;
+}) => void): Promise<SeatStatus>;
 //# sourceMappingURL=seat-probe.d.ts.map

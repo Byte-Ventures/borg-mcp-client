@@ -40,13 +40,17 @@ export function launchAllHelpText(version: string): string {
     `  --force                               Override live-session skips\n` +
     `  --launch-delay <ms>                   Wait between launches\n` +
     `  --help, -h                            Show this help\n\n` +
+    `Default: non-human-seat drones run in tmux; the human-seat drone opens in its\n` +
+    `own terminal. The human seat is the role that speaks with the human's authority.\n` +
+    `Drones whose human-seat identity is unknown also open in terminals. If tmux is\n` +
+    `missing, all drones open in terminals; without a compatible terminal, commands\n` +
+    `are printed for manual use. Explicit modes below override this routing.\n\n` +
     `Modes:\n` +
     `  terminals  Open each drone in its own terminal tab, with the drone's name as\n` +
-    `             the tab title. Default on macOS when iTerm2 or Terminal.app is\n` +
-    `             installed. Terminal.app opens one named window for each drone\n` +
+    `             the tab title. Terminal.app opens one named window for each drone\n` +
     `             instead; tabs would need macOS automation permissions, which borg\n` +
     `             does not request.\n` +
-    `  tmux       Open all drones in one shared tmux session. Default on Linux.\n` +
+    `  tmux       Open all drones in one shared tmux session.\n` +
     `  pastelist  Print the launch commands so you can run them yourself.\n`
   );
 }

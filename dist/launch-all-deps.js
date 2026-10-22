@@ -4,7 +4,7 @@
 // pure module (discovery / parser / orchestrator / backends) is unit-testable
 // with vi.fn() stubs. buildDefaultLaunchAllDeps() (added in launch-all-cmd
 // wiring / Phase 4) wires the real-IO production modules.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { mkdirSync, writeFileSync, unlinkSync } from './guarded-fs.js';
 import { createInterface } from 'node:readline/promises';
@@ -31,6 +31,14 @@ export function buildDefaultLaunchAllDeps() {
         attachInteractive: (cmd, args) => {
             spawnSync(cmd, args, { stdio: 'inherit' });
         },
+        spawnDetached: (cmd, args) => new Promise((resolve, reject) => {
+            const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+            child.once('error', reject);
+            child.once('spawn', () => {
+                child.unref();
+                resolve();
+            });
+        }),
         cwd: () => process.cwd(),
         pathExists: (p) => existsSync(p),
         homedir: () => borgHomeRoot(),
@@ -85,7 +93,15 @@ export function buildDefaultLaunchAllDeps() {
             }
             await preflightBorgServerTag(seat.apiUrl, trust.fetchImpl);
         },
-        probeSeat: (seat) => defaultProbeSeat(seat),
+        probeSeat: (seat) => {
+            // Saved role metadata may predate a reassignment on another machine.
+            delete seat.isHumanSeat;
+            return defaultProbeSeat(seat, (identity) => {
+                // Refresh routing metadata in memory; the probe does not rewrite saved seats.
+                if (typeof identity.is_human_seat === 'boolean')
+                    seat.isHumanSeat = identity.is_human_seat;
+            });
+        },
         getCliPreferenceForPath: (projectPath) => getProjectCliPreferenceForPath(projectPath),
         readAllProjectIdentities: () => cubesReadAllProjectIdentities(),
         findProjectRoot: (dir) => findProjectRoot(dir),
