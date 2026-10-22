@@ -108,6 +108,23 @@ describe('defaultProbeSeat production chain (real whoami → authedFetch verdict
     expect(fetchImpl).toHaveBeenCalledTimes(6);
   });
 
+  it.each([true, false])('reports current human-seat identity from the server: %s', async (isHumanSeat) => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = new URL(input.toString()).pathname;
+      const payload = path.endsWith('/roles')
+        ? { roles: [{ id: ROLE_ID, name: 'Custom', is_human_seat: isHumanSeat }] }
+        : path.endsWith('/drones')
+          ? { drones: [{ id: DRONE_ID, role_id: ROLE_ID, ...UNREPORTED_DRONE_RUNTIME_METADATA }] }
+          : { cube: { id: CUBE_ID, name: 'local-cube' } };
+      return new Response(JSON.stringify(envelope(payload)), { status: 200 });
+    });
+    wireMocks({ fetchImpl });
+    const { defaultProbeSeat } = await import('../src/seat-probe.js');
+    const onIdentity = vi.fn();
+    expect(await defaultProbeSeat(ACTIVE_CUBE, onIdentity)).toBe('live');
+    expect(onIdentity).toHaveBeenCalledWith(expect.objectContaining({ is_human_seat: isHumanSeat }));
+  });
+
   // (The `live` and `evicted` end-to-end cases are covered by the local-server
   // route-adapter suite and the evicted-reattach + drone-lifecycle tests; this
   // file focuses on the security-critical 401-classifier verdicts.)

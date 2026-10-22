@@ -1,4 +1,4 @@
-// client#400 — terminals backend (`--mode terminals`; macOS auto default).
+// client#400 — terminals backend (`--mode terminals`; human-seat/default fallback).
 // Opens each worktree as a new terminal window/tab. macOS: iTerm/Terminal via
 // osascript. Linux: $BORG_TERMINAL / $TERMINAL / probed emulator. No shared
 // session, so no post-launch attach. Hard-fails if no compatible terminal found.
@@ -63,8 +63,8 @@ async function launchMacOS(candidates: DroneCandidate[], opts: TerminalsOpts, de
   }
 }
 
-/** Linux: open each candidate in the first available terminal emulator. */
-async function launchLinux(candidates: DroneCandidate[], opts: TerminalsOpts, deps: LaunchAllDeps): Promise<void> {
+/** Shared preflight and dispatch selection, so both use the same emulator. */
+export function resolveLinuxTerminal(deps: LaunchAllDeps): string | undefined {
   const explicit = deps.getEnv('BORG_TERMINAL') || deps.getEnv('TERMINAL');
   const probe = ['gnome-terminal', 'konsole', 'kitty', 'wezterm', 'xterm'];
   let term: string | undefined = explicit;
@@ -76,6 +76,20 @@ async function launchLinux(candidates: DroneCandidate[], opts: TerminalsOpts, de
       }
     }
   }
+  return term;
+}
+
+export function hasCompatibleTerminal(deps: LaunchAllDeps): boolean {
+  if (!deps.isTTY()) return false;
+  if (deps.platform() === 'darwin') return hasMacOSTerminalApp(deps);
+  if (!deps.getEnv('DISPLAY')?.trim() && !deps.getEnv('WAYLAND_DISPLAY')?.trim()) return false;
+  const terminal = resolveLinuxTerminal(deps);
+  return terminal !== undefined && deps.runSyncExitCode('which', [terminal]) === 0;
+}
+
+/** Linux: open each candidate in the first available terminal emulator. */
+async function launchLinux(candidates: DroneCandidate[], opts: TerminalsOpts, deps: LaunchAllDeps): Promise<void> {
+  const term = resolveLinuxTerminal(deps);
   if (!term) {
     throw new NoTerminalError(
       'borg launch-all: --mode terminals requires a terminal emulator.\n' +
@@ -90,7 +104,7 @@ async function launchLinux(candidates: DroneCandidate[], opts: TerminalsOpts, de
       `printf '\\033]0;%s\\007' ${shellEscape(title)}; ` +
       buildLaunchCommand(c, opts.borgPath, { keepOpenOnFail: true });
     // `<term> -e sh -c '<cmd>'` opens a new window running the command.
-    deps.runSync(term, ['-e', 'sh', '-c', cmd]);
+    await deps.spawnDetached(term, ['-e', 'sh', '-c', cmd]);
     writeLockMarker(deps, c.cubeId, c.droneLabel, c.worktreeDir, opts.launchedAtISO);
   }
 }

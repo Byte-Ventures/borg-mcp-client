@@ -69,7 +69,7 @@ export const DOCS_SECTIONS = [
         slug: "cli",
         title: "CLI commands",
         url: `${SITE_URL}/docs/cli/`,
-        summary: "Client launch, cleanup, worktree maintenance, and launch-all reference.",
+        summary: "Client launch, cleanup, worktree maintenance, and launch-all reference. Batch startup uses tmux for non-human-seat drones and a separate terminal for the human seat (the role speaking with the human’s authority); without tmux it falls back to terminals.",
         keywords: ["cli", "command", "cleanup", "worktree", "launch", "launch-all", "terminal", "maintenance", "prune"],
     },
     {

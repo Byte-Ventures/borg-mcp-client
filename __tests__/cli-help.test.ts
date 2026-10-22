@@ -91,17 +91,18 @@ describe('client subcommand help', () => {
       '--mode', '--only', '--dry-run', '--no-attach', '--yes', '--force',
       '--launch-delay', '--help',
     ]) expect(text).toContain(flag);
+    expect(text).toContain('non-human-seat drones run in tmux');
+    expect(text).toContain('missing, all drones open in terminals');
     expect(text).not.toContain('--cli');
     expect(text).toContain('--mode <tmux|terminals|pastelist>');
     expect(text).not.toContain('--mode <tmux|windows|pastelist>');
     expect(text).toContain(
       `Modes:\n` +
       `  terminals  Open each drone in its own terminal tab, with the drone's name as\n` +
-      `             the tab title. Default on macOS when iTerm2 or Terminal.app is\n` +
-      `             installed. Terminal.app opens one named window for each drone\n` +
+      `             the tab title. Terminal.app opens one named window for each drone\n` +
       `             instead; tabs would need macOS automation permissions, which borg\n` +
       `             does not request.\n` +
-      `  tmux       Open all drones in one shared tmux session. Default on Linux.\n` +
+      `  tmux       Open all drones in one shared tmux session.\n` +
       `  pastelist  Print the launch commands so you can run them yourself.\n`,
     );
   });

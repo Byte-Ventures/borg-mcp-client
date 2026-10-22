@@ -27,6 +27,7 @@ function fleet(n: number): { paths: string[]; identities: Array<{ projectPath: s
       name: 'myrepo',
       sessionToken: 'sess',
       droneLabel: `drone-${i + 1}`,
+      isHumanSeat: false,
       apiUrl: 'http://api.test',
     } as ActiveCube,
   }));
@@ -38,6 +39,7 @@ function makeStubDeps(over: Partial<LaunchAllDeps> = {}): LaunchAllDeps {
     runSync: vi.fn(() => ''), // tmux/uname/git all succeed empty unless overridden
     runSyncExitCode: vi.fn(() => 1), // has-session: absent
     attachInteractive: vi.fn(),
+    spawnDetached: vi.fn(async () => {}),
     cwd: vi.fn(() => '/work/myrepo'),
     pathExists: vi.fn((p: string) => !p.endsWith('.app')),
     homedir: vi.fn(() => '/home/test'),
@@ -464,7 +466,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
   it.each([
     '/Applications/iTerm.app',
     '/System/Applications/Utilities/Terminal.app',
-  ])('macOS auto prefers the terminals backend when %s exists, even when tmux is available', async (terminalApp) => {
+  ])('macOS auto puts workers in tmux when %s exists', async (terminalApp) => {
     const { paths, identities } = fleet(1);
     const deps = makeStubDeps({
       getActiveCube: vi.fn(async () => ({ cubeId: CUBE_ID, name: 'myrepo' } as ActiveCube)),
@@ -474,8 +476,8 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
       runSync: vi.fn((cmd: string) => (cmd === 'git' ? porcelainFor(paths) : '')),
     });
     expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
-    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'osascript')).toBe(true);
-    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[1]?.[0] === 'new-session')).toBe(false);
+    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'osascript')).toBe(false);
+    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[1]?.[0] === 'new-session')).toBe(true);
   });
 
   it('macOS non-TTY auto never dispatches osascript and retains the prior pastelist fallback', async () => {
@@ -612,6 +614,177 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
   });
 });
 
+describe('default batch destinations', () => {
+  function mixedFleet(over: Partial<LaunchAllDeps> = {}) {
+    const { paths, identities } = fleet(3);
+    identities[0].cube.isHumanSeat = true;
+    identities[0].cube.droneLabel = 'custom-human';
+    identities[0].cube.roleName = 'Builder';
+    const deps = makeTmuxFleetDeps(paths, identities, {
+      isTTY: vi.fn(() => true),
+      pathExists: vi.fn(() => true),
+      ...over,
+    });
+    return { deps, paths, identities };
+  }
+
+  it('launches workers in tmux, the human in a terminal, then attaches and reconciles everyone', async () => {
+    const { deps, identities } = mixedFleet();
+    const sleep = vi.fn(async () => {});
+    expect(await runLaunchAll({ flags: {} }, deps, { ...OPTS, sleep })).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual(['drone-2', 'drone-3']);
+    const calls = (deps.runSync as any).mock.calls;
+    const scripts = calls.filter((c: any[]) => c[0] === 'osascript');
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0][1][1]).toContain(did(1));
+    const terminalCall = calls.findIndex((c: any[]) => c[0] === 'osascript');
+    const lastWorker = calls.findLastIndex((c: any[]) => c[0] === 'tmux' && c[1][0] === 'send-keys');
+    expect(terminalCall).toBeGreaterThan(lastWorker);
+    expect((deps.attachInteractive as any).mock.invocationCallOrder[0]).toBeGreaterThan(
+      (deps.runSync as any).mock.invocationCallOrder[terminalCall],
+    );
+    expect(sleep.mock.calls.filter((c: any[]) => c[0] === 2000)).toHaveLength(2);
+    expect(deps.getRoster).toHaveBeenCalledWith(identities[0].cube, OPTS.nowISO());
+    expect(stdoutOf(deps)).toContain('launched 3 drones');
+    for (const { cube } of identities) expect(stdoutOf(deps)).toContain(cube.droneLabel);
+  });
+
+  it('dry-run shows destinations without dispatching', async () => {
+    const { deps, paths } = mixedFleet();
+    expect(await runLaunchAll({ flags: { dryRun: true } }, deps, OPTS)).toBe(0);
+    expect(stdoutOf(deps)).toContain(`custom-human  ${paths[0]}  [terminal]`);
+    expect(stdoutOf(deps)).toContain(`drone-2  ${paths[1]}  [tmux]`);
+    expect(backendLaunchOrder(deps)).toEqual([]);
+    expect(deps.attachInteractive).not.toHaveBeenCalled();
+  });
+
+  it('uses fresh probe metadata rather than a stale saved classification', async () => {
+    const { deps } = mixedFleet({
+      probeSeat: vi.fn(async (seat) => {
+        seat.isHumanSeat = seat.droneId === did(2);
+        return 'live';
+      }),
+    });
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual(['custom-human', 'drone-3']);
+    const scripts = (deps.runSync as any).mock.calls.filter((c: any[]) => c[0] === 'osascript');
+    expect(scripts[0][1][1]).toContain(did(2));
+  });
+
+  it('keeps unknown identities out of tmux without dropping them', async () => {
+    const { deps, identities } = mixedFleet();
+    delete identities[1].cube.isHumanSeat;
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual(['drone-3']);
+    expect((deps.runSync as any).mock.calls.filter((c: any[]) => c[0] === 'osascript')).toHaveLength(2);
+    expect(stderrOf(deps)).toContain('identity is unknown');
+  });
+
+  it.each(['darwin', 'linux'] as const)('falls back to terminals when tmux is missing on %s', async (platform) => {
+    const { deps, paths } = mixedFleet({
+      platform: vi.fn(() => platform),
+      runSyncExitCode: vi.fn(() => 0),
+      getEnv: vi.fn((name) => name === 'BORG_TERMINAL' ? 'kitty' : name === 'DISPLAY' ? ':0' : undefined),
+      runSync: vi.fn((cmd, args) => {
+        if (cmd === 'git') return porcelainFor(paths);
+        if (cmd === 'tmux') throw new Error('ENOENT');
+        return '';
+      }),
+    });
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+    const terminal = platform === 'darwin' ? 'osascript' : 'kitty';
+    const calls = platform === 'darwin' ? (deps.runSync as any).mock.calls : (deps.spawnDetached as any).mock.calls;
+    expect(calls.filter((c: any[]) => c[0] === terminal)).toHaveLength(3);
+    expect(stderrOf(deps)).toContain('Falling back to terminals for all drones');
+    expect(deps.attachInteractive).not.toHaveBeenCalled();
+  });
+
+  it('preflights human terminal support before launching any workers', async () => {
+    const { deps } = mixedFleet({ pathExists: vi.fn((p) => !p.endsWith('.app')) });
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual([]);
+    expect(stdoutOf(deps)).toContain(`launch '${did(1)}'`);
+    expect(stdoutOf(deps)).toContain(`launch '${did(2)}'`);
+    expect(stderrOf(deps)).toContain('A terminal is required');
+  });
+
+  it('rejects an unsafe human terminal path before creating worker windows', async () => {
+    const { deps, paths, identities } = mixedFleet();
+    paths[0] += '\x01';
+    identities[0].projectPath = paths[0];
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(1);
+    expect(backendLaunchOrder(deps)).toEqual([]);
+    expect(stderrOf(deps)).toContain('nothing was launched');
+  });
+
+  it.each(['indeterminate', 'unreachable', 'server-failure'] as const)(
+    'routes a cached worker to a terminal when its current identity is unverified: %s', async (status) => {
+      const { deps } = mixedFleet({ probeSeat: vi.fn(async () => status) });
+      expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+      expect(backendLaunchOrder(deps)).toEqual([]);
+      expect((deps.runSync as any).mock.calls.filter((c: any[]) => c[0] === 'osascript')).toHaveLength(3);
+    },
+  );
+
+  it('treats a thrown identity probe as unknown rather than using cached worker metadata', async () => {
+    const { deps } = mixedFleet({ probeSeat: vi.fn(async () => { throw new Error('timeout'); }) });
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual([]);
+    expect((deps.runSync as any).mock.calls.filter((c: any[]) => c[0] === 'osascript')).toHaveLength(3);
+  });
+
+  it.each([undefined, '   '])('does not start workers on Linux without a graphical display: %j', async (display) => {
+    const { deps } = mixedFleet({
+      platform: vi.fn(() => 'linux'),
+      runSyncExitCode: vi.fn(() => 0),
+      getEnv: vi.fn((name) => name === 'BORG_TERMINAL' ? 'kitty' : name === 'DISPLAY' ? display : undefined),
+    });
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual([]);
+    expect(deps.spawnDetached).not.toHaveBeenCalled();
+    expect(stdoutOf(deps)).toContain(`launch '${did(1)}'`);
+  });
+
+  it.each(['DISPLAY', 'WAYLAND_DISPLAY'])('allows Linux split dispatch with %s', async (displayVariable) => {
+    const { deps } = mixedFleet({
+      platform: vi.fn(() => 'linux'),
+      runSyncExitCode: vi.fn(() => 0),
+      getEnv: vi.fn((name) => name === 'BORG_TERMINAL' ? 'kitty' : name === displayVariable ? ':0' : undefined),
+    });
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual(['drone-2', 'drone-3']);
+    expect(deps.spawnDetached).toHaveBeenCalledTimes(1);
+  });
+
+  it('quickstart keeps its full requested roster with the split', async () => {
+    const { deps, identities } = mixedFleet();
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, {
+      ...OPTS, droneIds: identities.map(({ cube }) => cube.droneId),
+      requireAllRequested: true, humanSeatLast: true,
+      targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
+    })).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual(['drone-2', 'drone-3']);
+    expect(stdoutOf(deps)).toContain('launched 3 drones');
+  });
+
+  it('human-only batches do not create or attach to an empty tmux session', async () => {
+    const { deps, identities } = mixedFleet();
+    identities.splice(1);
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual([]);
+    expect(deps.attachInteractive).not.toHaveBeenCalled();
+    expect(stdoutOf(deps)).not.toContain('Attach:');
+  });
+
+  it.each([{ noAttach: true }, {}])('worker-only headless batches launch detached: %j', async (flags) => {
+    const { deps, identities } = mixedFleet({ isTTY: vi.fn(() => false) });
+    identities[0].cube.isHumanSeat = false;
+    expect(await runLaunchAll({ flags }, deps, OPTS)).toBe(0);
+    expect(backendLaunchOrder(deps)).toHaveLength(3);
+    expect(deps.attachInteractive).not.toHaveBeenCalled();
+  });
+});
+
 describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted seats)', () => {
   const stderrOf = (deps: LaunchAllDeps): string =>
     (deps.stderr as any).mock.calls.map((c: any[]) => c[0]).join('');
@@ -622,8 +795,8 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
   function twoSeats(): { paths: string[]; identities: Array<{ projectPath: string; cube: ActiveCube }> } {
     const paths = ['/home/test/.borg/worktrees/myrepo/a', '/home/test/.borg/worktrees/myrepo/b'];
     const identities = [
-      { projectPath: paths[0], cube: { cubeId: CUBE_ID, droneId: did(1), name: 'myrepo', sessionToken: 'tok-a', droneLabel: 'drone-a', apiUrl: 'http://api.test' } as ActiveCube },
-      { projectPath: paths[1], cube: { cubeId: CUBE_ID, droneId: did(2), name: 'myrepo', sessionToken: 'tok-b', droneLabel: 'drone-b', apiUrl: 'http://api.test' } as ActiveCube },
+      { projectPath: paths[0], cube: { cubeId: CUBE_ID, droneId: did(1), name: 'myrepo', sessionToken: 'tok-a', droneLabel: 'drone-a', isHumanSeat: false, apiUrl: 'http://api.test' } as ActiveCube },
+      { projectPath: paths[1], cube: { cubeId: CUBE_ID, droneId: did(2), name: 'myrepo', sessionToken: 'tok-b', droneLabel: 'drone-b', isHumanSeat: false, apiUrl: 'http://api.test' } as ActiveCube },
     ];
     return { paths, identities };
   }
@@ -645,7 +818,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
   it('skips an EVICTED seat, launches the live ones, probes EACH seat with its OWN token', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'evicted' : 'live'));
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toContain('drone-b');
     expect(stderrOf(deps)).toMatch(/drone no longer in cube \(evicted\)/);
@@ -663,7 +836,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
       probeAuthority: vi.fn(async () => { throw new Error('connect ECONNREFUSED'); }),
     });
 
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(1);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(1);
     expect(deps.probeAuthority).toHaveBeenCalledOnce();
     expect(deps.probeSeat).not.toHaveBeenCalled();
     expect(dispatched(deps)).toBe(false);
@@ -675,7 +848,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     const { identities } = twoSeats();
     const deps = depsFor(identities, async (seat) => seat.sessionToken === 'tok-b' ? 'revoked' : 'live');
 
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(0);
     expect(deps.probeAuthority).toHaveBeenCalledOnce();
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toContain('Local session was revoked.');
@@ -684,7 +857,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
   it('ALL seats evicted → nothing to launch (the 4b post-server-gate early-return), exit 0, backend never invoked', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async () => 'evicted');
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(0);
     // 4b-specific phrasing — distinct from the 4a lock-live 'appear live; nothing to launch'.
     expect(stdoutOf(deps)).toMatch(/are not launchable .*nothing to launch/);
     expect(dispatched(deps)).toBe(false);
@@ -693,7 +866,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
   it('a superseded seat is skipped with the exact bounded recovery', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'rejected' : 'live'));
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toContain(
       'Local session was superseded by a newer enrollment.\n' +
@@ -704,7 +877,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
   it('a revoked seat is skipped with the distinct exact bounded recovery', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'revoked' : 'live'));
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toContain(
       'Local session was revoked.\n' +
@@ -715,7 +888,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
   it('ALL seats rejected → nothing launched, accurate summary (never called "evicted")', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async () => 'rejected');
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(false);
     const out = stdoutOf(deps);
     expect(out).toMatch(/are not launchable .*nothing to launch/);
@@ -726,7 +899,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
   it('an INDETERMINATE (transient) seat is LAUNCHED (fail-OPEN) with a soft note', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'indeterminate' : 'live'));
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toMatch(/could not confirm drone-b.*launching anyway/);
   });
@@ -734,7 +907,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
   it('SR-seven (b): a TRUST-MISMATCH seat is a TERMINAL SKIP (never fail-open-launched)', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'trust-mismatch' : 'live'));
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(0);
     // The live one launches; the trust-mismatch one is SKIPPED, not launched.
     expect(dispatched(deps)).toBe(true);
     const err = stderrOf(deps);
@@ -746,7 +919,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
   it('SR-seven (b): ALL trust-mismatch → nothing launched, terminal cause named (never fail-open)', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async () => 'trust-mismatch');
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(false);
     expect(stdoutOf(deps)).toMatch(/changed \(terminal\) server identity/);
   });
@@ -754,7 +927,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
   it('SR-seven (b): a CREDENTIAL-REJECTED seat is a cause-accurate SKIP (not fail-open), re-enroll guidance', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'credential-rejected' : 'live'));
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     const err = stderrOf(deps);
     expect(err).toMatch(/skipping drone-b.*saved credential was rejected/);
@@ -806,7 +979,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
       if (seat.sessionToken === 'tok-b') throw new Error('network down');
       return 'live';
     });
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(await runLaunchAll({ flags: { yes: true, mode: 'tmux' } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toMatch(/could not confirm drone-b.*launching anyway/);
   });

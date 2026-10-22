@@ -21,6 +21,7 @@ function makeStubDeps(over: Partial<LaunchAllDeps> = {}): LaunchAllDeps {
     runSync: vi.fn(() => ''),
     runSyncExitCode: vi.fn(() => 1),
     attachInteractive: vi.fn(),
+    spawnDetached: vi.fn(async () => {}),
     cwd: vi.fn(() => '/work/myrepo'),
     pathExists: vi.fn(() => true),
     homedir: vi.fn(() => '/home/test'),
@@ -263,7 +264,7 @@ describe('terminals backend (client#400 + control-char fold-in)', () => {
   it('Linux → uses $BORG_TERMINAL when set', async () => {
     const deps = makeStubDeps({ getEnv: vi.fn((n: string) => (n === 'BORG_TERMINAL' ? 'kitty' : undefined)) });
     await runTerminalsBackend([cand()], wopts('linux'), deps);
-    const call = (deps.runSync as any).mock.calls.find((c: any[]) => c[0] === 'kitty');
+    const call = (deps.spawnDetached as any).mock.calls.find((c: any[]) => c[0] === 'kitty');
     expect(call).toBeDefined();
     expect(call[1].at(-1)).toContain("borg · drone-1 · myrepo");
   });
@@ -276,7 +277,7 @@ describe('terminals backend (client#400 + control-char fold-in)', () => {
       deps,
     );
 
-    const call = (deps.runSync as any).mock.calls.find((c: any[]) => c[0] === 'kitty');
+    const call = (deps.spawnDetached as any).mock.calls.find((c: any[]) => c[0] === 'kitty');
     const command = call[1].at(-1) as string;
     expect(command).toContain('borg · drone\\u{1b}\\u{7}⏎\\u{d}label · cube\\u{1b}\\u{7}⏎\\u{d}name');
     expect(command).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);

@@ -728,6 +728,7 @@ export async function getRoleInfoByName(sessionToken, apiUrl, role, serverTrustI
 export async function whoami(active, opts = {}) {
     const local = assertSeatAuthority(active);
     const composed = await localCubeComposition(local, undefined, opts.signal);
+    opts.onRoleIdentity?.({ is_human_seat: composed.role.is_human_seat });
     return {
         cube_id: composed.cube.id,
         cube_name: composed.cube.name,

@@ -89,9 +89,11 @@ export function isTransportFailure(err: unknown): boolean {
  */
 export async function defaultProbeSeat(
   seat: ActiveCube,
+  onIdentity?: (identity: { is_human_seat?: boolean }) => void,
 ): Promise<SeatStatus> {
   try {
-    await whoami(seat);
+    if (onIdentity) await whoami(seat, { onRoleIdentity: onIdentity });
+    else await whoami(seat);
     return 'live';
   } catch (err) {
     if (err instanceof DroneEvictedError) return 'evicted';

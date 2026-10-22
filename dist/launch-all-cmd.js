@@ -7,7 +7,7 @@ import { discoverDroneCandidates } from './launch-all-discovery.js';
 import { resolveBorgPath } from './launch-all-command.js';
 import { sweepStaleLocks, isLockLive } from './launch-all-locks.js';
 import { runTmuxBackend } from './backends/launch-all-tmux.js';
-import { hasMacOSTerminalApp, runTerminalsBackend } from './backends/launch-all-terminals.js';
+import { hasCompatibleTerminal, runTerminalsBackend } from './backends/launch-all-terminals.js';
 import { runPastelistBackend } from './backends/launch-all-pastelist.js';
 /** Internal strict-seam result: requested sessions were not dispatched. */
 export const LAUNCH_ALL_NO_DISPATCH_EXIT_CODE = 2;
@@ -96,7 +96,7 @@ async function resolveTargetCube(args, deps) {
     return { cubeId: active.cubeId, name: active.name };
 }
 /** Backend selection: native-Windows / explicit / platform-specific auto. */
-function selectBackend(args, deps) {
+function selectBackend(args, deps, candidates) {
     const explicit = args.flags.mode;
     const platform = deps.platform();
     const nativeWindows = platform === 'win32' && !isWSL(deps);
@@ -112,18 +112,20 @@ function selectBackend(args, deps) {
     if (explicit === 'tmux') {
         return checkTmuxAvailable(deps) ? { backend: 'tmux' } : { hardFail: TMUX_INSTALL_HINT };
     }
-    // macOS defaults to native terminal tabs/windows when either supported app
-    // is installed. Explicit modes above always win.
-    if (platform === 'darwin' &&
-        deps.isTTY() &&
-        hasMacOSTerminalApp(deps)) {
+    const workers = candidates.filter((c) => c.seat.isHumanSeat === false);
+    const needsTerminal = workers.length !== candidates.length;
+    const terminalAvailable = hasCompatibleTerminal(deps);
+    if (workers.length === 0 && terminalAvailable)
+        return { backend: 'terminals' };
+    const tmuxAvailable = checkTmuxAvailable(deps);
+    if (tmuxAvailable && (!needsTerminal || terminalAvailable))
+        return { backend: 'split' };
+    if (!tmuxAvailable && terminalAvailable) {
+        deps.stderr(TMUX_INSTALL_HINT + 'Falling back to terminals for all drones.\n');
         return { backend: 'terminals' };
     }
-    const tmuxAvail = checkTmuxAvailable(deps);
-    // auto (no explicit mode)
-    if (tmuxAvail)
-        return { backend: 'tmux' };
-    deps.stderr(TMUX_INSTALL_HINT + 'Falling back to pastelist mode (paste the commands below).\n');
+    deps.stderr((tmuxAvailable ? 'A terminal is required for human-seat or unclassified drones.\n' : TMUX_INSTALL_HINT) +
+        'Falling back to pastelist mode (paste the commands below).\n');
     return { backend: 'pastelist' };
 }
 /** attach mode for tmux (spec §4.1 attach behavior). */
@@ -296,6 +298,10 @@ export async function runLaunchAll(args, deps, opts = {}) {
         catch {
             status = 'indeterminate';
         }
+        if (args.flags.mode === undefined && status !== 'live') {
+            // A transient probe must not route a reassigned human seat using cached metadata.
+            delete c.seat.isHumanSeat;
+        }
         if (status === 'evicted') {
             evictedCount += 1;
             deps.stderr(`skipping ${c.droneLabel} (${c.worktreeDir}): drone no longer in cube (evicted) — ` +
@@ -377,11 +383,31 @@ export async function runLaunchAll(args, deps, opts = {}) {
             `${causeText}; nothing to launch.\n`);
         return 0;
     }
+    const sel = selectBackend(args, deps, launchable);
+    if ('hardFail' in sel) {
+        deps.stderr(sel.hardFail);
+        return 1;
+    }
+    // The terminal backend cannot dispatch control characters in worktree paths.
+    // Reject before creating worker windows rather than silently skipping a seat.
+    if (args.flags.mode === undefined && (sel.backend === 'split' || sel.backend === 'terminals')) {
+        const unsafe = launchable.find((c) => (sel.backend === 'terminals' || c.seat.isHumanSeat !== false) && /[\x00-\x1f\x7f]/.test(c.worktreeDir));
+        if (unsafe) {
+            deps.stderr(`borg launch-all: ${unsafe.droneLabel}'s worktree path contains a control character; nothing was launched. Use --mode pastelist for manual commands.\n`);
+            return 1;
+        }
+    }
+    const destination = (c) => sel.backend === 'split'
+        ? (c.seat.isHumanSeat === false ? 'tmux' : 'terminal')
+        : sel.backend;
+    if (args.flags.mode === undefined && launchable.some((c) => c.seat.isHumanSeat === undefined)) {
+        deps.stderr('Human-seat identity is unknown for some drones; keeping them out of tmux.\n');
+    }
     // 5. --dry-run
     if (args.flags.dryRun) {
         deps.stdout(`borg launch-all (dry-run): would launch ${launchable.length} drone(s) for cube '${cubeName}':\n`);
         for (const c of launchable)
-            deps.stdout(`  ${c.droneLabel}  ${c.worktreeDir}\n`);
+            deps.stdout(`  ${c.droneLabel}  ${c.worktreeDir}  [${destination(c)}]\n`);
         return 0;
     }
     // 6. >6 confirmation
@@ -392,12 +418,7 @@ export async function runLaunchAll(args, deps, opts = {}) {
             return 0;
         }
     }
-    // 7. backend selection
-    const sel = selectBackend(args, deps);
-    if ('hardFail' in sel) {
-        deps.stderr(sel.hardFail);
-        return 1;
-    }
+    // 7. require actual dispatch for quickstart
     if (sel.backend === 'pastelist' && opts.requireAllRequested) {
         deps.stderr('borg launch-all: pastelist mode prints commands for manual use but does not launch sessions; ' +
             'nothing was launched. Run `borg launch-all` separately to print the commands.\n');
@@ -411,9 +432,29 @@ export async function runLaunchAll(args, deps, opts = {}) {
             ...launchable.filter((candidate) => candidate.seat.isHumanSeat === true),
         ]
         : launchable;
+    const usesTmux = sel.backend === 'tmux' || sel.backend === 'split';
     // 8. dispatch
     try {
-        if (sel.backend === 'tmux') {
+        if (sel.backend === 'split') {
+            const workers = backendLaunchable.filter((c) => c.seat.isHumanSeat === false);
+            const terminals = backendLaunchable.filter((c) => c.seat.isHumanSeat !== false);
+            if (workers.length > 0) {
+                await runTmuxBackend(workers, { sessionName, borgPath, attachMode: 'none', launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+            }
+            if (workers.length > 0 && terminals.length > 0 && launchDelayMs > 0)
+                await sleep(launchDelayMs);
+            if (terminals.length > 0) {
+                await runTerminalsBackend(terminals, { borgPath, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+            }
+            const attachMode = resolveAttachMode(args, deps);
+            if (attachMode !== 'none') {
+                deps.attachInteractive('tmux', [attachMode === 'switch' ? 'switch-client' : 'attach-session', '-t', sessionName]);
+            }
+            else {
+                printCheatSheet(sessionName, deps);
+            }
+        }
+        else if (sel.backend === 'tmux') {
             const attachMode = resolveAttachMode(args, deps);
             await runTmuxBackend(backendLaunchable, { sessionName, borgPath, attachMode, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
             if (attachMode === 'none') {
@@ -443,7 +484,7 @@ export async function runLaunchAll(args, deps, opts = {}) {
         const status = statuses ? (statuses.get(c.droneId) === 'verified' ? 'VERIFIED' : 'unconfirmed (may still be joining)') : 'launched';
         deps.stdout(`  ${c.droneLabel}  ${c.worktreeDir}  ${status}\n`);
     }
-    if (sel.backend === 'tmux') {
+    if (usesTmux) {
         deps.stdout(`\nAttach: tmux attach -t ${sessionName}\n`);
     }
     return 0;

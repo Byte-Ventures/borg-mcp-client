@@ -11,5 +11,8 @@ export interface TerminalsOpts {
     sleep: (ms: number) => Promise<void>;
 }
 export declare function hasMacOSTerminalApp(deps: Pick<LaunchAllDeps, 'pathExists'>): boolean;
+/** Shared preflight and dispatch selection, so both use the same emulator. */
+export declare function resolveLinuxTerminal(deps: LaunchAllDeps): string | undefined;
+export declare function hasCompatibleTerminal(deps: LaunchAllDeps): boolean;
 export declare function runTerminalsBackend(candidates: DroneCandidate[], opts: TerminalsOpts, deps: LaunchAllDeps): Promise<void>;
 //# sourceMappingURL=launch-all-terminals.d.ts.map

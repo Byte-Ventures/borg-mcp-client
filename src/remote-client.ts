@@ -1048,10 +1048,14 @@ export async function getRoleInfoByName(
 
 export async function whoami(
   active: ActiveCube,
-  opts: { signal?: AbortSignal } = {},
+  opts: {
+    signal?: AbortSignal;
+    onRoleIdentity?: (identity: { is_human_seat?: boolean }) => void;
+  } = {},
 ): Promise<{ cube_id: string; cube_name: string; drone_id: string; drone_label: string; role_id: string; role_name: string; runtime_metadata: { agent_kind: AgentKind | null; reported_model: string | null; working_repo_name: string | null; working_repo_origin: string | null }; runtime_metadata_reported: boolean }> {
   const local = assertSeatAuthority(active);
   const composed = await localCubeComposition(local, undefined, opts.signal);
+  opts.onRoleIdentity?.({ is_human_seat: composed.role.is_human_seat });
   return {
     cube_id: composed.cube.id,
     cube_name: composed.cube.name,
