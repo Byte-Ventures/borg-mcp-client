@@ -79,8 +79,27 @@ export function verifyOpenCodePrivateWindowsPath(filename) {
 export async function verifyOpenCodePrivateWindowsPathAsync(filename) {
     if (process.platform !== 'win32')
         return;
+    const command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsAclScript(false), 'utf16le').toString('base64')];
+    const env = { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename };
+    const bun = globalThis.Bun;
+    if (bun) {
+        // Use Bun's native process lifecycle instead of its Node close-event shim.
+        const child = bun.spawn(command, { env, stdin: null, stdout: 'ignore', stderr: 'ignore' });
+        let timeout;
+        try {
+            const code = await Promise.race([child.exited, new Promise((_resolve, reject) => {
+                    timeout = setTimeout(() => { child.kill('SIGKILL'); reject(privateStateError()); }, 10_000);
+                })]);
+            if (code !== 0)
+                throw privateStateError();
+        }
+        finally {
+            clearTimeout(timeout);
+        }
+        return;
+    }
     await new Promise((resolve, reject) => {
-        const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsAclScript(false), 'utf16le').toString('base64')], { env: { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename }, stdio: 'ignore', windowsHide: true, shell: false });
+        const child = spawn(command[0], command.slice(1), { env, stdio: 'ignore', windowsHide: true, shell: false });
         const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(privateStateError()); }, 10_000);
         child.once('error', () => { clearTimeout(timeout); reject(privateStateError()); });
         child.once('close', code => { clearTimeout(timeout); code === 0 ? resolve() : reject(privateStateError()); });

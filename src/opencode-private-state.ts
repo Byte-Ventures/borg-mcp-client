@@ -67,9 +67,25 @@ export function verifyOpenCodePrivateWindowsPath(filename: string): void {
  * can hang. Keep the same ACL policy but await an asynchronous child there. */
 export async function verifyOpenCodePrivateWindowsPathAsync(filename: string): Promise<void> {
   if (process.platform !== 'win32') return;
+  const command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsAclScript(false), 'utf16le').toString('base64')];
+  const env = { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename };
+  const bun = (globalThis as typeof globalThis & { Bun?: { spawn(command: string[], options: unknown): {
+    exited: Promise<number>; kill(signal: string): void;
+  } } }).Bun;
+  if (bun) {
+    // Use Bun's native process lifecycle instead of its Node close-event shim.
+    const child = bun.spawn(command, { env, stdin: null, stdout: 'ignore', stderr: 'ignore' });
+    let timeout: ReturnType<typeof setTimeout>;
+    try {
+      const code = await Promise.race([child.exited, new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => { child.kill('SIGKILL'); reject(privateStateError()); }, 10_000);
+      })]);
+      if (code !== 0) throw privateStateError();
+    } finally { clearTimeout(timeout!); }
+    return;
+  }
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsAclScript(false), 'utf16le').toString('base64')],
-      { env: { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename }, stdio: 'ignore', windowsHide: true, shell: false });
+    const child = spawn(command[0], command.slice(1), { env, stdio: 'ignore', windowsHide: true, shell: false });
     const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(privateStateError()); }, 10_000);
     child.once('error', () => { clearTimeout(timeout); reject(privateStateError()); });
     child.once('close', code => { clearTimeout(timeout); code === 0 ? resolve() : reject(privateStateError()); });

@@ -103,7 +103,9 @@ try {
   const { readOpenCodeV2Descriptor, callOpenCodeV2Broker } = await import('../../dist/opencode-v2-broker.js');
   const { openCodePrivateRoot } = await import('../../dist/opencode-private-state.js');
   let nativeClient;
+  let nativeRootHeaders;
   const env = { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, BORG_STATE_ROOT: root,
+    ...(realSeat ? { BORG_SERVER_DATA_DIR: process.env.BORG_SERVER_DATA_DIR } : {}),
     SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, COMSPEC: process.env.COMSPEC, PATHEXT: process.env.PATHEXT,
     USERPROFILE: root, APPDATA: join(root, 'appdata'), LOCALAPPDATA: join(root, 'localappdata'),
     XDG_CONFIG_HOME: join(root, 'xdg-config'), XDG_DATA_HOME: join(root, 'data'), XDG_CACHE_HOME: join(root, 'cache'), XDG_STATE_HOME: join(root, 'state'),
@@ -121,6 +123,7 @@ try {
     spawnProcess: (executable, args, options) => {
       assert.equal(executable, realpathSync(binary)); assert.ok(args.includes('--server')); assert.ok(!args.includes('--prompt'));
       assert.ok(options.env.OPENCODE_PASSWORD);
+      nativeRootHeaders = { Authorization: 'Basic ' + Buffer.from('opencode:' + options.env.OPENCODE_PASSWORD).toString('base64') };
       tui = new EventEmitter(); tui.kill = () => { tui.emit('exit', 0); tui.emit('close', 0); return true; };
       void (async () => {
         const { OpenCode } = await import('@opencode/client');
@@ -139,6 +142,10 @@ try {
   const descriptor = readOpenCodeV2Descriptor(descriptorPath);
   await nativeClient.session.wait({ sessionID: descriptor.sessionID });
   assert.ok(requests.length, 'Fixture provider received a generation');
+  const modelInput = JSON.stringify(requests);
+  for (const hidden of [descriptor.capability, 'borgOpenCodeInjectedEntry', 'borgOpenCodeWakeIdentity']) {
+    assert.ok(!modelInput.includes(hidden), 'Broker credentials and admission metadata stay out of model input');
+  }
   assert.ok(JSON.stringify(requests[0].messages).includes('Fixture user plugin survived'));
   assert.equal(readFileSync(userConfigPath, 'utf8'), userConfig);
   console.log(JSON.stringify({ version: installation.version, requests: requests.length, tools: requests.at(-1).tools?.map(tool => tool.function?.name),
@@ -167,6 +174,36 @@ try {
   await nativeClient.session.compact({ sessionID: descriptor.sessionID });
   await nativeClient.session.wait({ sessionID: descriptor.sessionID });
   assert.ok(JSON.stringify(requests.at(-1).messages).includes('generated declarations'), 'Compaction retains Borg orientation and Code Mode guidance');
+  if (!realSeat) {
+    // Two actual native hosts share the ordinary user config/data while their
+    // worktrees, API credentials, plugin environments, and broker seats differ.
+    const otherDirectory = join(root, 'second-worktree'); mkdirSync(otherDirectory);
+    let otherURL;
+    let otherHeaders;
+    const otherSeat = { worktree: otherDirectory, droneId: 'second-fixture-drone', cubeId: 'fixture-cube' };
+    const other = await launchOpenCodeV2Process({ installation, cwd: otherDirectory, env,
+      prompt: 'Concurrent native host fixture', seat: otherSeat,
+      mcpCommand: [process.execPath, resolve('test/fixtures/opencode-mcp.mjs'), join(root, 'other-mcp-calls.jsonl')],
+      spawnProcess: (_executable, args, options) => {
+        otherURL = args[args.indexOf('--server') + 1];
+        otherHeaders = { Authorization: 'Basic ' + Buffer.from('opencode:' + options.env.OPENCODE_PASSWORD).toString('base64') };
+        const child = new EventEmitter(); child.kill = () => { child.emit('exit', 0); child.emit('close', 0); return true; };
+        queueMicrotask(() => child.emit('spawn')); return child;
+      } });
+    try {
+      const otherDescriptorPath = readdirSync(openCodePrivateRoot()).map(name => join(openCodePrivateRoot(), name))
+        .find(filename => filename !== descriptorPath && /opencode-v2-[\w-]{43}\.json$/.test(filename));
+      const otherDescriptor = readOpenCodeV2Descriptor(otherDescriptorPath);
+      assert.notEqual(otherDescriptor.url, descriptor.url); assert.notEqual(otherDescriptor.capability, descriptor.capability);
+      assert.notEqual(otherDescriptor.sessionID, descriptor.sessionID);
+      assert.equal((await fetch(`${otherURL}/api/info`, { headers: nativeRootHeaders })).status, 401);
+      assert.equal((await fetch(`${otherURL}/api/info`, { headers: otherHeaders })).status, 200);
+      await assert.rejects(callOpenCodeV2Broker(otherDescriptor, '/bind', { seat: descriptor.seat }));
+      assert.equal((await callOpenCodeV2Broker(descriptor, '/status')).sessionID, descriptor.sessionID);
+      assert.equal(readFileSync(userConfigPath, 'utf8'), userConfig);
+    } finally { other.process.kill(); await other.cleanup(); }
+    assert.ok((await callOpenCodeV2Broker(descriptor, '/status')).pluginReady, 'Closing the other host leaves this host active');
+  }
   tui.kill(); await launch.cleanup(); launch = undefined;
   await assert.rejects(callOpenCodeV2Broker(descriptor, '/status'));
 } catch (error) {
