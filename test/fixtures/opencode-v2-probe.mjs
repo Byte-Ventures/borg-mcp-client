@@ -16,6 +16,7 @@ const requests = [];
 const providerSteps = [];
 // Only paths/status/timing: never print authorization, request bodies, or API responses.
 const nativeRequests = [];
+let nativePlugins;
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const pathname = new URL(typeof input === 'string' || input instanceof URL ? input : input.url).pathname;
@@ -23,6 +24,13 @@ globalThis.fetch = async (input, init) => {
   try {
     const response = await originalFetch(input, init);
     nativeRequests.push({ pathname, status: response.status, milliseconds: Date.now() - started });
+    if (!realSeat && process.platform === 'win32' && (pathname === '/api/session' || pathname.endsWith('/prompt'))) {
+      try {
+        const state = await originalFetch(new URL('/api/plugin', typeof input === 'string' || input instanceof URL ? input : input.url),
+          { headers: init?.headers, signal: AbortSignal.timeout(5_000) });
+        nativePlugins = JSON.stringify(await state.json()).replace(/[A-Za-z0-9_-]{43,}/g, '[redacted]').slice(0, 4000);
+      } catch {}
+    }
     return response;
   } catch (error) {
     nativeRequests.push({ pathname, error: error.name, milliseconds: Date.now() - started });
@@ -150,7 +158,7 @@ try {
   tui.kill(); await launch.cleanup(); launch = undefined;
   await assert.rejects(callOpenCodeV2Broker(descriptor, '/status'));
 } catch (error) {
-  console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12), providerSteps: providerSteps.slice(-6) }));
+  console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12), nativePlugins, providerSteps: providerSteps.slice(-6) }));
   throw error;
 } finally {
   globalThis.fetch = originalFetch;
