@@ -23,6 +23,7 @@ import {
   resolveForeignPathReminderPath,
 } from './self-path.js';
 import { shellEscape } from './shell-escape.js';
+import { readManagedOpenCodeMcpCommands, refreshManagedOpenCodeMcpCommands } from './opencode-common-config.js';
 import { BORG_STATE_ROOT_ENV, borgAgentConfigEnv, borgHomeRoot } from './private-root.js';
 import type { LaunchAccessPaths } from './launch-access.js';
 import { BORG_LAUNCH_EXPECTED_SEAT_ENV, type BorgCli } from './cubes.js';
@@ -1136,13 +1137,7 @@ function readCodexMcpCommand(configPath: string): unknown {
 
 function readOpenCodeMcpCommand(configPath: string): unknown {
   try {
-    const borgServer = readJsonFile(configPath)?.mcp?.[MCP_SERVER_NAME];
-    if (!borgServer || borgServer.type !== 'local') return undefined;
-    const environment = borgServer.environment ?? borgServer.env;
-    if (environment?.BORG_AGENT_KIND !== 'opencode' && environment?.BORG_OPENCODE !== '1') {
-      return undefined;
-    }
-    return borgServer.command;
+    return readManagedOpenCodeMcpCommands(configPath).find(isStaleBorgMcpCommand);
   } catch {
     return undefined;
   }
@@ -1184,10 +1179,7 @@ function refreshCodexMcpCommand(configPath: string): void {
 }
 
 function refreshOpenCodeMcpCommand(configPath: string): void {
-  const config = readJsonFile(configPath);
-  const borgServer = config.mcp[MCP_SERVER_NAME];
-  borgServer.command = Array.isArray(borgServer.command) ? [MCP_COMMAND] : MCP_COMMAND;
-  writeJsonFile(configPath, config);
+  refreshManagedOpenCodeMcpCommands(configPath, isStaleBorgMcpCommand, MCP_COMMAND);
 }
 
 /**

@@ -60,6 +60,8 @@ native overlay, preserving user providers, policies, plugins, and unrelated MCP
 servers. V1 and V2 plugins have separate per-launch entrypoints outside OpenCode's
 shared plugin autoload directories, so alternating versions does not replace a
 shared plugin with an incompatible export.
+Updates refresh Borg-owned commands in either configuration shape without
+changing disabled or Code Mode settings, and prepare the per-launch integration.
 
 Borg removes an old global `borg-orient.js` only when its entire contents match
 the Borg generator. A modified or unrecognized file is preserved and launch is

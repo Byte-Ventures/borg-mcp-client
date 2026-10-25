@@ -13,11 +13,10 @@ import { borgHomeRoot, isCanonicalPath } from './private-root.js';
 import { getPackageVersion } from './version.js';
 import {
   buildBorgPluginSource,
-  installBorgPlugin,
   openCodePluginPath,
 } from './opencode-plugin.js';
 import { openCodeStartupDiagnosticLogPath } from './opencode-drone.js';
-import { hasLaunchScopedOpenCodePlugins } from './opencode-launch-plugin.js';
+import { hasLaunchScopedOpenCodePlugins, migrateLegacyOpenCodePlugin, registerLaunchScopedOpenCodePlugins } from './opencode-launch-plugin.js';
 
 export const AGENT_HOOK_BINS = [
   'borg-regen',
@@ -362,7 +361,12 @@ export function refreshAndVerifyManagedAgentIntegrations(): void {
       'Repair the named managed hook config, then rerun borg update --yes',
     );
   }
-  if (isOpenCodeMcpServerConfigured() && !hasLaunchScopedOpenCodePlugins()) installBorgPlugin();
+  try {
+    if (isOpenCodeMcpServerConfigured()) {
+      migrateLegacyOpenCodePlugin();
+      registerLaunchScopedOpenCodePlugins();
+    }
+  } catch (error) { failures.push(error instanceof Error ? error.message : String(error)); }
   try {
     assertAgentIntegrationHealthy(inspectAgentIntegrationHealth());
   } catch (error) {

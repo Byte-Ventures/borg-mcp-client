@@ -116,11 +116,15 @@ export function installLaunchOpenCodePlugin(generation, launch, root = openCodeP
     const entrypoint = path.join(directory, 'index.js');
     fs.writeFileSync(path.join(directory, 'package.json'), '{"type":"module"}', { mode: 0o600 });
     fs.writeFileSync(entrypoint, generation === 2 ? buildBorgV2PluginSource() : buildBorgPluginSource(getPackageVersion()), { mode: 0o600 });
+    registerLaunchScopedOpenCodePlugins(root);
+    return { directory, entrypoint: pathToFileURL(entrypoint).href };
+}
+export function registerLaunchScopedOpenCodePlugins(root = openCodePrivateRoot()) {
+    ensureOpenCodePrivateRoot(root);
     const marker = path.join(root, 'opencode-launch-plugins.json');
     if (!isCanonicalPath(marker))
         throw new Error('Unsafe OpenCode integration marker path');
     fs.writeFileSync(marker, JSON.stringify({ mode: 'per-launch', generations: [1, 2] }), { mode: 0o600 });
-    return { directory, entrypoint: pathToFileURL(entrypoint).href };
 }
 export function hasLaunchScopedOpenCodePlugins(homeDir = borgHomeRoot()) {
     const marker = path.join(homeDir, '.config', 'borgmcp', ...(process.platform === 'win32' ? ['opencode-launches'] : []), 'opencode-launch-plugins.json');

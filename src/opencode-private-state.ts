@@ -62,4 +62,3 @@ export function ensureOpenCodePrivateRoot(root = openCodePrivateRoot()): void {
 export function verifyOpenCodePrivateWindowsPath(filename: string): void {
   if (process.platform === 'win32') windowsAcl(filename, false);
 }
-

@@ -7,5 +7,6 @@ export declare function installLaunchOpenCodePlugin(generation: 1 | 2, launch: s
     directory: string;
     entrypoint: string;
 };
+export declare function registerLaunchScopedOpenCodePlugins(root?: string): void;
 export declare function hasLaunchScopedOpenCodePlugins(homeDir?: string): boolean;
 //# sourceMappingURL=opencode-launch-plugin.d.ts.map
