@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { realpathSync, statSync } from 'node:fs';
 import { fs } from './guarded-fs.js';
 import { borgConfigRoot, ensurePrivateBorgConfigRootSync, isCanonicalPath } from './private-root.js';
 
@@ -9,6 +10,18 @@ export function openCodePrivateRoot(): string {
   return process.platform === 'win32' ? path.join(borgConfigRoot(), 'opencode-launches') : borgConfigRoot();
 }
 const sealedWindowsRoots = new Map<string, string>();
+
+/** The native host and Node can spell a Windows path differently. Compare
+ * directory identities there, including case-sensitive NTFS directories. */
+export function sameOpenCodeDirectory(left: string, right: string): boolean {
+  const a = realpathSync(left); const b = realpathSync(right);
+  if (process.platform !== 'win32') return a === b;
+  const first = statSync(a, { bigint: true }); const second = statSync(b, { bigint: true });
+  if (!first.isDirectory() || !second.isDirectory()) return false;
+  if (first.ino !== 0n && second.ino !== 0n) return first.dev === second.dev && first.ino === second.ino;
+  const normalized = (value: string) => value.replace(/^\\\\\?\\/, '').replace(/^[A-Z]:/, drive => drive.toLowerCase());
+  return normalized(a) === normalized(b);
+}
 function windowsAcl(filename: string, initialize: boolean): void {
   const script = `
 $ErrorActionPreference = 'Stop'

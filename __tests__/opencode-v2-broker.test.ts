@@ -124,6 +124,12 @@ describe('OpenCode 2 session broker', () => {
     await expect(broker.call('/status')).rejects.toThrow();
   });
 
+  it.skipIf(process.platform !== 'win32')('accepts native Windows path spelling only for the same physical directory', async () => {
+    const { broker, sessions, seat } = await fixture();
+    sessions.set('ses_root', { id: 'ses_root', location: { directory: root.toLowerCase() } });
+    expect(await broker.call('/bind', { seat })).toMatchObject({ sessionID: 'ses_root' });
+  });
+
   it('refuses a non-private descriptor or a symlink', async () => {
     const { broker } = await fixture();
     const link = join(root, 'link.json'); symlinkSync(broker.descriptorPath, link);

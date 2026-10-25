@@ -38,7 +38,7 @@ const provider = createServer(async (req, res) => {
   const advertisedPaths = [...system.matchAll(/- (tools\.[^\n(]+)\(/g)].map(match => match[1]);
   const borgPaths = [...new Set([...advertisedPaths, ...discoveredPaths])].filter(name => /^tools\.borg[.[]/.test(name));
   const paths = borgPaths.filter(name=>name.includes('borg_read-log') || name.includes('borg_roster'));
-  const logPath = borgPaths.find(name=>name.endsWith('.borg_log'));
+  const logPath = borgPaths.find(name=>/(?:\.borg_log|\["borg_log"\])$/.test(name));
   if (process.env.OPENCODE_TEST_TRACE === '1') console.log(JSON.stringify({ paths: [...system.matchAll(/tools\.[^\n(]+\(/g)].map(match => match[0]), direct: body.tools?.map(tool => tool.function?.name) }));
   const directNames = body.tools?.map(tool => tool.function?.name).filter(name => ['borg_borg_read-log','borg_borg_roster'].includes(name)) ?? [];
   const shellPath = [...advertisedPaths, ...discoveredPaths].find(name => /(?:\.shell|\["shell"\])$/.test(name));
@@ -46,7 +46,7 @@ const provider = createServer(async (req, res) => {
   if (process.env.OPENCODE_TEST_TRACE === '1') console.log(JSON.stringify({ shellPath, result: body.messages.filter(message=>message.role==='tool') }));
   let toolCalls = [];
   const actionIndex = requests.length - (searched ? 1 : 0);
-  if (!searched && system.includes('catalog is partial') && (paths.length < 2 || !shellPath)) {
+  if (!searched && system.includes('catalog is partial') && (paths.length < 2 || !shellPath || (realSeat && !logPath))) {
     searched = true;
     toolCalls = [{index:0,id:'fixture-search',type:'function',function:{name:'execute',arguments:JSON.stringify({code:'return {borg:search({namespace:"tools.borg",limit:100}),shell:search({query:"shell",limit:100})};'})}}];
   }

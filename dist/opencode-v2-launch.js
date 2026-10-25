@@ -12,7 +12,7 @@ import { startOpenCodeV2Broker, OPENCODE_V2_DESCRIPTOR_ENV } from './opencode-v2
 import { installLaunchOpenCodePlugin, migrateLegacyOpenCodePlugin } from './opencode-launch-plugin.js';
 import { selectOpenCodeAdapter } from './opencode-adapter.js';
 import { borgAgentConfigEnv } from './private-root.js';
-import { openCodePrivateRoot } from './opencode-private-state.js';
+import { openCodePrivateRoot, sameOpenCodeDirectory } from './opencode-private-state.js';
 import { resolveMcpBinaryPath, resolveRegenPath } from './self-path.js';
 import { getActiveCube, BORG_LAUNCH_EXPECTED_SEAT_ENV } from './cubes.js';
 export function preserveOpenCodeV2McpOptions(sources) {
@@ -97,7 +97,7 @@ export async function launchOpenCodeV2Process(options) {
     const active = options.seat ? null : await getActiveCube();
     const seat = options.seat ?? { worktree: realpathSync(active?.worktree ?? directory),
         droneId: active?.droneId ?? 'unassimilated', cubeId: active?.cubeId ?? 'unassimilated' };
-    if (directory !== seat.worktree)
+    if (!sameOpenCodeDirectory(directory, seat.worktree))
         throw new Error('OpenCode 2 must launch in the selected drone worktree.');
     migrateLegacyOpenCodePlugin();
     let installation = options.installation;
@@ -132,7 +132,7 @@ export async function launchOpenCodeV2Process(options) {
                 // Native --continue is an explicit user request; never use this list
                 // heuristic for later autonomous wake/session switching.
                 const sessions = await transport.client.session.list({ directory, parentID: null, order: 'desc', limit: 100 });
-                const candidate = sessions.data.find((s) => !s.parentID && realpathSync(s.location.directory) === directory);
+                const candidate = sessions.data.find((s) => !s.parentID && sameOpenCodeDirectory(s.location.directory, directory));
                 if (candidate)
                     sessionID = candidate.id;
             }
@@ -147,6 +147,7 @@ export async function launchOpenCodeV2Process(options) {
             else if (!args.continue || sessionID === broker.descriptor.sessionID) {
                 await transport.client.session.create({ id: sessionID, location: { directory }, title: 'Borg' });
             }
+            phase = 'session binding';
             await broker.selectSession(sessionID);
             phase = 'runtime plugin readiness';
             // The published native host lazily loads plugins on prompt admission,

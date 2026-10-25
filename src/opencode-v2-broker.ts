@@ -5,7 +5,7 @@ import { openSync } from './guarded-fs.js';
 import path from 'node:path';
 import { fs } from './guarded-fs.js';
 import { isCanonicalPath } from './private-root.js';
-import { openCodePrivateRoot, ensureOpenCodePrivateRoot, verifyOpenCodePrivateWindowsPath } from './opencode-private-state.js';
+import { openCodePrivateRoot, ensureOpenCodePrivateRoot, verifyOpenCodePrivateWindowsPath, sameOpenCodeDirectory } from './opencode-private-state.js';
 import { LOG_AUDIT_NUDGE } from './log-audit-core.js';
 import type { OpenCodeV2Transport } from './opencode-v2-transport.js';
 
@@ -105,7 +105,7 @@ export async function startOpenCodeV2Broker(options: {
   };
   const verifySession = async (id: string) => {
     const session = await options.transport.client.session.get({ sessionID: id });
-    if (session.parentID || realpathSync(session.location.directory) !== options.seat.worktree) {
+    if (session.parentID || !sameOpenCodeDirectory(session.location.directory, options.seat.worktree)) {
       throw new Error('OpenCode session is not a human session in this drone worktree.');
     }
     claimOpenCodeV2Session(id, options.seat, root);
