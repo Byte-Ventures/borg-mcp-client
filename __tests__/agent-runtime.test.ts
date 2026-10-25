@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { join } from 'node:path';
 import {
   BORG_AGENT_KIND_ENV,
   BORG_CODEX_REMOTE_WAKE_ENV,
@@ -12,6 +13,12 @@ import {
 } from '../src/agent-runtime';
 
 describe('agent runtime identity', () => {
+  it('does not carry a Borg V2 database into a later generation launch', () => {
+    const descriptor = join('/tmp', 'private-borg', 'launch.json');
+    const env = { BORG_OPENCODE_V2_DESCRIPTOR: descriptor, OPENCODE_DB: join('/tmp', 'private-borg', 'opencode-v2.db') };
+    expect(withAgentRuntimeEnv(env, 'opencode')).not.toHaveProperty('OPENCODE_DB');
+    expect(withAgentRuntimeEnv({ ...env, OPENCODE_DB: '/operator/chosen.db' }, 'opencode').OPENCODE_DB).toBe('/operator/chosen.db');
+  });
   it('treats the pinned agent CLI as authoritative over legacy transport markers', () => {
     expect(resolveSessionAgentKind({
       [BORG_AGENT_KIND_ENV]: 'claude',

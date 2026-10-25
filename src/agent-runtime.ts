@@ -7,6 +7,7 @@
 
 import { BORG_STATE_ROOT_ENV } from './private-root.js';
 import { randomBytes } from 'node:crypto';
+import { dirname, join } from 'node:path';
 
 export type AgentKind = 'claude' | 'codex' | 'opencode';
 
@@ -51,6 +52,9 @@ export function withAgentRuntimeEnv(
   agentKind: AgentKind
 ): NodeJS.ProcessEnv {
   const next = { ...env };
+  if (next.BORG_OPENCODE_V2_DESCRIPTOR && next.OPENCODE_DB === join(dirname(next.BORG_OPENCODE_V2_DESCRIPTOR), 'opencode-v2.db')) {
+    delete next.OPENCODE_DB;
+  }
   delete next[BORG_AGENT_KIND_ENV];
   delete next[BORG_CODEX_REMOTE_WAKE_ENV];
   delete next[BORG_OPENCODE_ENV];

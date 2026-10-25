@@ -187,6 +187,7 @@ it('consumes native continuation options before building a Borg-owned TUI launch
 it('preserves unrelated inline JSONC and an explicit direct-tool preference', () => {
   const overlay = openCodeV2LaunchOverlay({ OPENCODE_CONFIG_CONTENT: '{// comment\n"model":"local/test","mcp":{"servers":{"other":{"type":"local","command":["other"]},"borg":{"codemode":false}}},"plugins":["user-plugin"],"permissions":[{"action":"execute","resource":"*","effect":"deny"}]}' }, '/private/tmp/descriptor', '/private/tmp/plugin');
   const config = JSON.parse(overlay.OPENCODE_CONFIG_CONTENT!);
+  expect(overlay.OPENCODE_DB).toBe(join('/private/tmp', 'opencode-v2.db'));
   expect(config.mcp.servers.borg.codemode).toBe(false);
   expect(config.mcp.servers.other.command).toEqual(['other']);
   expect(config.permissions).toEqual([{ action: 'execute', resource: '*', effect: 'deny' }]);

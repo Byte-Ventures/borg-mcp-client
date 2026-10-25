@@ -11,7 +11,7 @@ import { createOpenCodeV2Transport } from './opencode-v2-transport.js';
 import { startOpenCodeV2Broker, OPENCODE_V2_DESCRIPTOR_ENV, OPENCODE_V2_VERIFICATION_KEY_ENV, type OpenCodeV2Seat } from './opencode-v2-broker.js';
 import { installLaunchOpenCodePlugin, migrateLegacyOpenCodePlugin } from './opencode-launch-plugin.js';
 import { selectOpenCodeAdapter } from './opencode-adapter.js';
-import { borgAgentConfigEnv } from './private-root.js';
+import { borgAgentConfigEnv, isCanonicalPath } from './private-root.js';
 import { openCodePrivateRoot, sameOpenCodeDirectory } from './opencode-private-state.js';
 import { resolveMcpBinaryPath, resolveRegenPath } from './self-path.js';
 import { getActiveCube, BORG_LAUNCH_EXPECTED_SEAT_ENV } from './cubes.js';
@@ -65,6 +65,9 @@ export function openCodeV2LaunchOverlay(env: NodeJS.ProcessEnv, descriptorPath: 
   };
   for (const key of ['BORG_STATE_ROOT', 'BORG_API_URL', BORG_LAUNCH_EXPECTED_SEAT_ENV]) if (env[key]) environment[key] = env[key]!;
   return { ...borgAgentConfigEnv(env), BORG_SESSION: '1', BORG_AGENT_KIND: 'opencode', BORG_OPENCODE: '1', [OPENCODE_V2_DESCRIPTOR_ENV]: descriptorPath,
+    // V2 migrations are incompatible with V1's default database. Keep the
+    // ordinary config/data roots but isolate the incompatible session DB.
+    OPENCODE_DB: path.join(path.dirname(descriptorPath), 'opencode-v2.db'),
     OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...content,
       mcp: { ...content.mcp, servers: { ...content.mcp?.servers,
         borg: { ...existing, type: 'local', command: mcpCommand, environment,
@@ -117,6 +120,7 @@ export async function launchOpenCodeV2Process(options: {
       await broker?.close(); await server?.close(); fs.rmSync(plugin.directory, { recursive: true, force: true });
     };
     try {
+      if (!isCanonicalPath(env.OPENCODE_DB!)) throw new OpenCodeV2LaunchError('Borg OpenCode 2 database path contains a symlink. No kickoff was submitted.');
       server = await startOpenCodeV2Server({ installation, directory, env });
       phase = 'configuration inspection';
       const transport = await createOpenCodeV2Transport(server);
@@ -137,7 +141,7 @@ export async function launchOpenCodeV2Process(options: {
       }
       if (args.sessionID) {
         try { await transport.client.session.get({ sessionID }); }
-        catch { await transport.client.session.create({ id: sessionID, location: { directory } }, { signal: AbortSignal.timeout(60_000) }); }
+        catch { throw new OpenCodeV2LaunchError('OpenCode 2 session could not be resumed in Borg\'s V2 database. Check the session ID or start a new Borg session.'); }
       } else if (!args.continue || sessionID === broker.descriptor.sessionID) {
         // Creating the first native instance can initialize plugins/providers.
         // Keep that startup bounded without applying its longer limit to wakes.

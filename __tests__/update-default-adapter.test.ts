@@ -209,7 +209,7 @@ afterEach(() => {
 });
 
 describe('default npm update adapter', () => {
-  it('gates OpenCode plugin repair on registration and preserves unreadable failures', async () => {
+  it('gates launch-plugin migration on registration and preserves unverified or unsafe files', async () => {
     const root = mkdtempSync(join(tmpdir(), 'borg-update-opencode-plugin-'));
     roots.push(root);
     const canonicalRoot = realpathSync(root);
@@ -256,12 +256,14 @@ describe('default npm update adapter', () => {
     expect(readFileSync(plugin, 'utf8')).toBe(priorSource);
 
     writeFileSync(openCodeConfig, JSON.stringify({ mcp: { borg: { type: 'local' } } }));
+    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(/Borg preserved the file/);
+    expect(readFileSync(plugin, 'utf8')).toBe(priorSource);
+    writeFileSync(plugin, BORG_PLUGIN_SOURCE);
     await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
-    expect(readFileSync(plugin, 'utf8')).toBe(BORG_PLUGIN_SOURCE);
+    expect(existsSync(plugin)).toBe(false);
 
     const symlinkTarget = join(canonicalRoot, 'operator-data.txt');
     writeFileSync(symlinkTarget, 'operator data');
-    rmSync(plugin);
     symlinkSync(symlinkTarget, plugin);
     await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
       /OpenCode borg-orient\.js plugin: refused .*plugin path is a symlink/,
@@ -273,9 +275,8 @@ describe('default npm update adapter', () => {
     rmSync(plugin);
 
     await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
-    expect(readFileSync(plugin, 'utf8')).toBe(BORG_PLUGIN_SOURCE);
+    expect(existsSync(plugin)).toBe(false);
 
-    rmSync(plugin);
     mkdirSync(plugin);
     await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
       /OpenCode borg-orient\.js plugin: refused .*plugin path is not a regular file/,

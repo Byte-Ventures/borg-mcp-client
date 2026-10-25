@@ -20,8 +20,14 @@ TUI environment; the MCP process receives a separate, session-scoped capability.
 The orientation plugin has its own capability for human-session handoffs; the
 MCP wake credential cannot authorize a handoff or change plugin readiness.
 
+Borg sets `OPENCODE_DB` to a separate persistent V2 database in its private
+state directory. This prevents V2 migrations from changing the database V1
+uses. Provider settings and environment credentials remain available. Saved
+provider accounts may need `/connect` in the Borg TUI. V1 retains its ordinary
+database and inherited `OPENCODE_DB`.
+
 Use `borg --cli opencode --session <id>` or `borg --cli opencode --continue` to
-resume a V2 session. Borg checks the selected session's worktree and saved drone
+resume a session in Borg's V2 database. Borg checks its worktree and saved drone
 ownership. A native child session or another drone's session is refused. After
 launch, a new human session becomes the wake target only after its human prompt
 is verified in durable history. Borg never guesses a wake target from the most

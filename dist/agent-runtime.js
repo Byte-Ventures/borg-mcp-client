@@ -6,6 +6,7 @@
  */
 import { BORG_STATE_ROOT_ENV } from './private-root.js';
 import { randomBytes } from 'node:crypto';
+import { dirname, join } from 'node:path';
 /** Pinned into MCP-child environments by Borg launch paths. */
 export const BORG_AGENT_KIND_ENV = 'BORG_AGENT_KIND';
 export const BORG_CLAUDE_LAUNCH_CORRELATION_ENV = 'BORG_CLAUDE_LAUNCH_CORRELATION';
@@ -41,6 +42,9 @@ export function resolveReportableSessionAgentKind(env = process.env) {
  */
 export function withAgentRuntimeEnv(env, agentKind) {
     const next = { ...env };
+    if (next.BORG_OPENCODE_V2_DESCRIPTOR && next.OPENCODE_DB === join(dirname(next.BORG_OPENCODE_V2_DESCRIPTOR), 'opencode-v2.db')) {
+        delete next.OPENCODE_DB;
+    }
     delete next[BORG_AGENT_KIND_ENV];
     delete next[BORG_CODEX_REMOTE_WAKE_ENV];
     delete next[BORG_OPENCODE_ENV];

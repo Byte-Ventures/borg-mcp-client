@@ -1,6 +1,8 @@
 // Invoked explicitly with a published native binary; never contacts a model provider.
 import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync, realpathSync, readdirSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,11 +10,13 @@ import assert from 'node:assert/strict';
 const binary = process.env.OPENCODE_TEST_V2_BINARY;
 assert.ok(binary, 'Set OPENCODE_TEST_V2_BINARY');
 const realSeat = Boolean(process.env.OPENCODE_TEST_SEAT_HOME);
+const v1Binary = process.env.OPENCODE_TEST_V1_BINARY;
 if (realSeat) assert.ok(process.env.CI === 'true' && process.env.BORG_E2E === '1' && process.platform === 'linux');
 const root = realSeat ? realpathSync(process.env.OPENCODE_TEST_SEAT_HOME) : mkdtempSync(join(realpathSync(tmpdir()), 'borg v2 & launch-'));
 const directory = realSeat ? realpathSync(process.env.OPENCODE_TEST_SEAT_WORKTREE) : root;
 process.env.BORG_STATE_ROOT = root;
 const requests = [];
+let configuredProviderCredential = true;
 const providerSteps = [];
 // Only paths/status/timing: never print authorization, request bodies, or API responses.
 const nativeRequests = [];
@@ -58,9 +62,12 @@ const userPlugin = join(root, 'user-plugin'); mkdirSync(userPlugin);
 writeFileSync(join(userPlugin, 'index.js'), `export default {id:'borg.native-fixture.user',async setup(ctx){ await ctx.session.hook('context',event=>event.system.push({type:'text',text:'Fixture user plugin survived'})); }};`);
 mkdirSync(join(root, '.config', 'opencode'), {recursive:true});
 const userConfigPath = join(root, '.config', 'opencode', 'opencode.jsonc');
-const userConfig = '{// User configuration must survive the launch\n"plugins":' + JSON.stringify([userPlugin]) + ',"permissions":[{"action":"borg_borg_*","resource":"*","effect":"ask"}]' + (direct ? ',"mcp":{"servers":{"borg":{"type":"local","command":["user-borg-placeholder"],"codemode":false}}}' : '') + '}\n';
+const userConfig = v1Binary
+  ? '{// Shared V1-readable user configuration\n"$schema":"https://opencode.ai/config.json","permission":{"borg_borg_*":"ask"},"mcp":{"borg":' + JSON.stringify({ type: 'local', command: [process.execPath, resolve('test/fixtures/opencode-mcp.mjs'), join(root, 'v1-mcp-calls.jsonl')], environment: { BORG_AGENT_KIND: 'opencode' } }) + '}}\n'
+  : '{// User configuration must survive the launch\n"plugins":' + JSON.stringify([userPlugin]) + ',"permissions":[{"action":"borg_borg_*","resource":"*","effect":"ask"}]' + (direct ? ',"mcp":{"servers":{"borg":{"type":"local","command":["user-borg-placeholder"],"codemode":false}}}' : '') + '}\n';
 writeFileSync(userConfigPath, userConfig);
 const provider = createServer(async (req, res) => {
+  configuredProviderCredential &&= req.headers.authorization === 'Bearer fixture';
   let input = ''; for await (const chunk of req) input += chunk;
   const body = JSON.parse(input); requests.push(body);
   const system = body.messages.filter(message => message.role === 'system').map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n');
@@ -110,6 +117,7 @@ try {
   const { openCodePrivateRoot } = await import('../../dist/opencode-private-state.js');
   let nativeClient;
   let nativeRootHeaders;
+  let nativeRootURL;
   const env = { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, BORG_STATE_ROOT: root,
     ...(realSeat ? { BORG_SERVER_DATA_DIR: process.env.BORG_SERVER_DATA_DIR } : {}),
     SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, COMSPEC: process.env.COMSPEC, PATHEXT: process.env.PATHEXT,
@@ -117,19 +125,20 @@ try {
     XDG_CONFIG_HOME: join(root, 'xdg-config'), XDG_DATA_HOME: join(root, 'data'), XDG_CACHE_HOME: join(root, 'cache'), XDG_STATE_HOME: join(root, 'state'),
     OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1',
     OPENCODE_CONFIG_CONTENT: JSON.stringify({ update: 'disable', snapshots: false, model: 'borg-fixture/model',
-      plugins: [plugin],
+      plugins: [plugin, ...(v1Binary ? [userPlugin] : [])],
       providers: { 'borg-fixture': { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: `http://127.0.0.1:${provider.address().port}/v1`, apiKey: 'fixture' },
         models: { model: { name: 'Fixture', limit: { context: 32000, output: 1024 } } } } } }) };
   const installation = inspectOpenCodeInstallation(env, { resolveExecutable: () => realpathSync(binary),
     readVersion: executable => { const { execFileSync } = process.getBuiltinModule('child_process'); return execFileSync(executable, ['--version'], { encoding: 'utf8', env }); } });
   let tui;
-  launch = await launchOpenCodeV2Process({ installation, cwd: directory, env, prompt: 'Local integration fixture',
+  const launchOptions = { installation, cwd: directory, env, prompt: 'Local integration fixture',
     ...(realSeat ? {} : { mcpCommand: [process.execPath, resolve('test/fixtures/opencode-mcp.mjs'), callsPath] }),
     seat: { worktree: directory, droneId: process.env.OPENCODE_TEST_DRONE_ID ?? 'fixture-drone', cubeId: process.env.OPENCODE_TEST_CUBE_ID ?? 'fixture-cube' },
     spawnProcess: (executable, args, options) => {
       assert.equal(executable, realpathSync(binary)); assert.ok(args.includes('--server')); assert.ok(!args.includes('--prompt'));
       assert.ok(options.env.OPENCODE_PASSWORD);
       nativeRootHeaders = { Authorization: 'Basic ' + Buffer.from('opencode:' + options.env.OPENCODE_PASSWORD).toString('base64') };
+      nativeRootURL = args[args.indexOf('--server') + 1];
       tui = new EventEmitter(); tui.kill = () => { tui.emit('exit', 0); tui.emit('close', 0); return true; };
       void (async () => {
         const { OpenCode } = await import('@opencode/client');
@@ -143,11 +152,13 @@ try {
           await new Promise(resolve => setTimeout(resolve, 100));
         }
       })().catch(error => tui.emit('error', error)); return tui;
-    } });
+    } };
+  launch = await launchOpenCodeV2Process(launchOptions);
   const descriptorPath = join(openCodePrivateRoot(), readdirSync(openCodePrivateRoot()).find(name => /^opencode-v2-[\w-]{43}\.json$/.test(name)));
   const descriptor = readOpenCodeV2Descriptor(descriptorPath);
   await nativeClient.session.wait({ sessionID: descriptor.sessionID });
   assert.ok(requests.length, 'Fixture provider received a generation');
+  assert.ok(configuredProviderCredential, 'Configured provider credentials remain available in the isolated database');
   const modelInput = JSON.stringify(requests);
   for (const hidden of [descriptor.capability, 'borgOpenCodeInjectedEntry', 'borgOpenCodeWakeIdentity']) {
     assert.ok(!modelInput.includes(hidden), 'Broker credentials and admission metadata stay out of model input');
@@ -212,8 +223,68 @@ try {
     } finally { other.process.kill(); await other.cleanup(); }
     assert.ok((await callOpenCodeV2Broker(descriptor, '/status')).pluginReady, 'Closing the other host leaves this host active');
   }
+  if (v1Binary) {
+    const { installLaunchOpenCodePlugin } = await import('../../dist/opencode-launch-plugin.js');
+    const { allocateOpenCodePort } = await import('../../dist/opencode-drone.js');
+    const correlation = randomBytes(32).toString('base64url');
+    const v1Plugin = installLaunchOpenCodePlugin(1, correlation);
+    const v1Directory = join(root, 'v1-worktree'); mkdirSync(v1Directory);
+    const port = await allocateOpenCodePort();
+    const authorization = { Authorization: 'Basic ' + Buffer.from('opencode:v1-fixture').toString('base64') };
+    const child = spawn(v1Binary, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
+      cwd: v1Directory, stdio: ['ignore', 'ignore', 'pipe'], env: { ...env, HOME: root, XDG_CONFIG_HOME: join(root, '.config'),
+        BORG_SESSION: '1', BORG_OPENCODE_LAUNCH_CORRELATION: correlation,
+        OPENCODE_SERVER_PASSWORD: 'v1-fixture', OPENCODE_SERVER_USERNAME: 'opencode',
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ autoupdate: false, plugin: [v1Plugin.entrypoint] }) } });
+    const closed = new Promise(resolve => child.once('close', resolve));
+    let v1Error = ''; child.stderr.on('data', chunk => { v1Error = (v1Error + chunk).slice(-4096); });
+    child.on('error', () => {});
+    const request = async (pathname, body) => {
+      const response = await fetch(`http://127.0.0.1:${port}${pathname}`, { method: body ? 'POST' : 'GET',
+        headers: { ...authorization, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(3000) });
+      assert.ok(response.ok, `Concurrent V1 request ${pathname}: ${response.status}`); return response.json();
+    };
+    try {
+      let ready = false;
+      for (let i = 0; i < 100; i++) {
+        try { await request('/session'); ready = true; break; } catch {}
+        if (child.exitCode !== null) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      assert.ok(ready, 'V1 starts while V2 owns a private server with the same user config/data: ' + v1Error.replace(/[A-Za-z0-9_-]{43,}/g, '[redacted]'));
+      const session = await request('/session', {});
+      assert.equal((await request('/mcp')).borg?.status, 'connected');
+      await request(`/session/${session.id}/message`, { parts: [{ type: 'text', text: 'Concurrent V1 fixture' }], noReply: true });
+      const messages = await request(`/session/${session.id}/message`);
+      assert.ok(messages.some(message => message.parts.some(part => part.metadata?.borgOpenCodeLaunchCorrelation === correlation)));
+      assert.equal((await fetch(`http://127.0.0.1:${port}/session`, { headers: nativeRootHeaders })).status, 401);
+      assert.equal((await fetch(`${nativeRootURL}/api/info`, { headers: authorization })).status, 401);
+      assert.equal(readFileSync(userConfigPath, 'utf8'), userConfig);
+    } finally {
+      child.kill('SIGTERM'); const timeout = setTimeout(() => child.kill('SIGKILL'), 2000);
+      await closed; clearTimeout(timeout);
+    }
+    assert.ok((await callOpenCodeV2Broker(descriptor, '/status')).pluginReady, 'Closing V1 leaves the V2 launch active');
+  }
   tui.kill(); await launch.cleanup(); launch = undefined;
   await assert.rejects(callOpenCodeV2Broker(descriptor, '/status'));
+  if (!realSeat) {
+    for (const passthroughArgs of [['--session', descriptor.sessionID], ['--continue']]) {
+      launch = await launchOpenCodeV2Process({ ...launchOptions, passthroughArgs });
+      const filename = readdirSync(openCodePrivateRoot()).find(name => /^opencode-v2-[\w-]{43}\.json$/.test(name));
+      const resumed = readOpenCodeV2Descriptor(join(openCodePrivateRoot(), filename));
+      assert.equal(resumed.sessionID, descriptor.sessionID, 'Resume and continue use the persistent Borg V2 session');
+      const message = await nativeClient.session.message.get({ sessionID: resumed.sessionID, messageID: wake.id });
+      assert.equal(message.metadata.borgOpenCodeWakeIdentity, wake.id, 'Wake metadata survives compaction and native host restart');
+      await nativeClient.session.wait({ sessionID: resumed.sessionID });
+      tui.kill(); await launch.cleanup(); launch = undefined;
+    }
+    const { Session } = await import('@opencode/schema/session');
+    const generatedBefore = requests.length;
+    await assert.rejects(launchOpenCodeV2Process({ ...launchOptions, passthroughArgs: ['--session', Session.ID.create()] }), /could not be resumed/);
+    assert.equal(requests.length, generatedBefore, 'A missing resume target never submits a replacement kickoff');
+  }
 } catch (error) {
   console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12), nativePlugins, providerSteps: providerSteps.slice(-6) }));
   throw error;

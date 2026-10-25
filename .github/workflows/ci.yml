@@ -150,3 +150,5 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/opencode-v1" --save-exact "opencode-ai@${{ matrix.opencode }}"
           OPENCODE_TEST_V1_BINARY="$RUNNER_TEMP/opencode-v1/node_modules/.bin/opencode" node test/fixtures/opencode-v1-probe.mjs
+          npm install --prefix "$RUNNER_TEMP/opencode-v2" --save-exact @opencode/cli@2.1.2
+          OPENCODE_TEST_V1_BINARY="$RUNNER_TEMP/opencode-v1/node_modules/.bin/opencode" OPENCODE_TEST_V2_BINARY="$RUNNER_TEMP/opencode-v2/node_modules/@opencode/cli/bin/opencode.exe" node test/fixtures/opencode-v2-probe.mjs

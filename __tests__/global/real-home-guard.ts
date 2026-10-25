@@ -99,13 +99,20 @@ export function treeChanges(before: TreeSnapshot, after: TreeSnapshot, live: Reg
 }
 
 /** Occurrences of each marker in names and file contents under `directory` (never follows links). */
-export function scanForMarkers(directory: string, markers = TEST_MARKERS): Record<string, number> {
+export function scanForMarkers(directory: string, markers = TEST_MARKERS, readFile: (filename: string) => Buffer = readFileSync): Record<string, number> {
   const counts: Record<string, number> = Object.fromEntries(markers.map((marker) => [marker, 0]));
   const needles = markers.map((marker) => [marker, Buffer.from(marker)] as const);
   for (const [path, entry] of snapshotTree(directory)) {
     for (const [marker] of needles) if (path.includes(marker)) counts[marker] += 1;
     if (entry.type !== 'file') continue;
-    const data = readFileSync(join(directory, path));
+    let data: Buffer;
+    try { data = readFile(join(directory, path)); }
+    catch (error) {
+      // An active stream lease can disappear after the snapshot. Keep all
+      // other errors actionable, and still scan every remaining live file.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && isLive(path, LIVE_WRITERS)) continue;
+      throw error;
+    }
     for (const [marker, needle] of needles) {
       for (let at = data.indexOf(needle); at >= 0; at = data.indexOf(needle, at + 1)) counts[marker] += 1;
     }
