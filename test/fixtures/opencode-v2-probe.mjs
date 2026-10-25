@@ -9,7 +9,7 @@ const binary = process.env.OPENCODE_TEST_V2_BINARY;
 assert.ok(binary, 'Set OPENCODE_TEST_V2_BINARY');
 const realSeat = Boolean(process.env.OPENCODE_TEST_SEAT_HOME);
 if (realSeat) assert.ok(process.env.CI === 'true' && process.env.BORG_E2E === '1' && process.platform === 'linux');
-const root = realSeat ? realpathSync(process.env.OPENCODE_TEST_SEAT_HOME) : mkdtempSync(join(realpathSync(tmpdir()), 'borg-v2-launch-'));
+const root = realSeat ? realpathSync(process.env.OPENCODE_TEST_SEAT_HOME) : mkdtempSync(join(realpathSync(tmpdir()), 'borg v2 & launch-'));
 const directory = realSeat ? realpathSync(process.env.OPENCODE_TEST_SEAT_WORKTREE) : root;
 process.env.BORG_STATE_ROOT = root;
 const requests = [];
@@ -30,7 +30,7 @@ globalThis.fetch = async (input, init) => {
       nativeOrigin = new URL(typeof input === 'string' || input instanceof URL ? input : input.url).origin;
       nativeHeaders = init?.headers;
     }
-    if (!realSeat && process.platform === 'win32' && nativeOrigin && (pathname === '/api/session' || pathname.endsWith('/prompt') || pathname === '/status')) {
+    if (!realSeat && process.platform === 'win32' && nativeOrigin && pathname === '/status') {
       try {
         const state = await originalFetch(new URL('/api/plugin', nativeOrigin),
           { headers: nativeHeaders, signal: AbortSignal.timeout(5_000) });

@@ -73,8 +73,10 @@ export async function verifyOpenCodePrivateWindowsPathAsync(filename: string): P
     exited: Promise<number>; kill(signal: string): void;
   } } }).Bun;
   if (bun) {
-    // Use Bun's native process lifecycle instead of its Node close-event shim.
-    const child = bun.spawn(command, { env, stdin: null, stdout: 'ignore', stderr: 'ignore' });
+    // Compiled Bun's Windows native-process hang also affects PowerShell.
+    // Use its documented cmd wrapper workaround (oven-sh/bun#32011). The
+    // command contains only fixed words and base64; paths stay in env data.
+    const child = bun.spawn(['cmd.exe', '/d', '/s', '/c', command.join(' ')], { env, stdin: null, stdout: 'ignore', stderr: 'ignore' });
     let timeout: ReturnType<typeof setTimeout>;
     try {
       const code = await Promise.race([child.exited, new Promise<never>((_resolve, reject) => {
