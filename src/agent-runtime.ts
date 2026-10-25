@@ -56,6 +56,7 @@ export function withAgentRuntimeEnv(
   delete next[BORG_OPENCODE_ENV];
   delete next[BORG_CLAUDE_LAUNCH_CORRELATION_ENV];
   delete next.BORG_OPENCODE_V2_DESCRIPTOR;
+  delete next.BORG_OPENCODE_V2_VERIFICATION_KEY;
   delete next.BORG_OPENCODE_PLUGIN_MODE;
   next[BORG_AGENT_KIND_ENV] = agentKind;
   if (agentKind === 'claude') {

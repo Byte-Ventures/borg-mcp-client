@@ -1,8 +1,10 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, realpathSync, readFileSync, readdirSync, chmodSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, readFileSync, writeFileSync, readdirSync, chmodSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startOpenCodeV2Broker, readOpenCodeV2Descriptor, readOpenCodeV2DescriptorAsync, claimOpenCodeV2Session, callOpenCodeV2Broker } from '../src/opencode-v2-broker.js';
+import { generateKeyPairSync } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { startOpenCodeV2Broker, readOpenCodeV2Descriptor, readOpenCodeV2PluginDescriptor, claimOpenCodeV2Session, callOpenCodeV2Broker } from '../src/opencode-v2-broker.js';
 import { decodeOpenCodeV2Message } from '../src/opencode-v2-transport.js';
 import { parseOpenCodeV2SessionArgs, openCodeV2LaunchOverlay } from '../src/opencode-v2-launch.js';
 
@@ -32,7 +34,9 @@ describe('OpenCode 2 session broker', () => {
   it('gives MCP only a private session capability and revokes it at shutdown', async () => {
     const { broker, seat } = await fixture();
     const descriptor = readOpenCodeV2Descriptor(broker.descriptorPath);
-    expect(await readOpenCodeV2DescriptorAsync(broker.descriptorPath)).toEqual(descriptor);
+    const plugin = readOpenCodeV2PluginDescriptor(broker.descriptorPath + '.plugin', broker.pluginVerificationKey);
+    expect(plugin.sessionID).toEqual(descriptor.sessionID);
+    expect(plugin.capability).not.toBe(descriptor.capability);
     expect(descriptor.server).toEqual({ pid: 123, version: '2.1.2' });
     expect(await broker.call('/bind', { seat })).toMatchObject({ sessionID: 'ses_root', generation: 2 });
     await expect(broker.call('/bind', { seat: { ...seat, droneId: 'other' } })).rejects.toThrow();
@@ -43,6 +47,33 @@ describe('OpenCode 2 session broker', () => {
     await broker.close();
     await expect(broker.call('/status')).rejects.toThrow();
     expect(readdirSync(root).some(name => name.endsWith('.json') && !name.includes('journal') && !name.includes('owner'))).toBe(false);
+  });
+
+  it('refuses a substituted plugin descriptor, a different launch key, and missing signature', async () => {
+    const { broker } = await fixture();
+    const filename = broker.descriptorPath + '.plugin';
+    const original = readFileSync(filename, 'utf8');
+    expect(() => readOpenCodeV2PluginDescriptor(filename, '')).toThrow('owning launch');
+    const otherKey = generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).toString('base64url');
+    expect(() => readOpenCodeV2PluginDescriptor(filename, otherKey)).toThrow('owning launch');
+    const data = JSON.parse(original); data.url = 'http://127.0.0.1:12345';
+    writeFileSync(filename, JSON.stringify(data));
+    expect(() => readOpenCodeV2PluginDescriptor(filename, broker.pluginVerificationKey)).toThrow('owning launch');
+    delete data.signature; writeFileSync(filename, JSON.stringify(data));
+    expect(() => readOpenCodeV2PluginDescriptor(filename, broker.pluginVerificationKey)).toThrow('owning launch');
+    writeFileSync(filename, original);
+    await broker.selectSession('ses_root');
+    expect(readOpenCodeV2PluginDescriptor(filename, broker.pluginVerificationKey).sessionID).toBe('ses_root');
+  });
+
+  it.skipIf(process.platform !== 'win32')('rechecks Windows file ACLs before activating plugin callbacks', async () => {
+    const { broker } = await fixture();
+    const filename = broker.descriptorPath + '.plugin';
+    const original = readFileSync(filename, 'utf8');
+    execFileSync('icacls.exe', [filename, '/grant', '*S-1-1-0:(R)'], { stdio: 'ignore' });
+    await expect(broker.call('/mcp-options')).rejects.toThrow();
+    rmSync(filename); writeFileSync(filename, original, { mode: 0o600 });
+    await expect(broker.call('/mcp-options')).resolves.toEqual({});
   });
 
   it('persists native message intent before admission and reuses it after an ambiguous response', async () => {

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { realpathSync, statSync } from 'node:fs';
 import { fs } from './guarded-fs.js';
 import { borgConfigRoot, ensurePrivateBorgConfigRootSync, isCanonicalPath } from './private-root.js';
@@ -63,33 +63,3 @@ export function verifyOpenCodePrivateWindowsPath(filename: string): void {
   if (process.platform === 'win32') windowsAcl(filename, false);
 }
 
-/** Native OpenCode uses compiled Bun, whose synchronous Windows subprocesses
- * can hang. Keep the same ACL policy but await an asynchronous child there. */
-export async function verifyOpenCodePrivateWindowsPathAsync(filename: string): Promise<void> {
-  if (process.platform !== 'win32') return;
-  const command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsAclScript(false), 'utf16le').toString('base64')];
-  const env = { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename };
-  const bun = (globalThis as typeof globalThis & { Bun?: { spawn(command: string[], options: unknown): {
-    exited: Promise<number>; kill(signal: string): void;
-  } } }).Bun;
-  if (bun) {
-    // Compiled Bun's Windows native-process hang also affects PowerShell.
-    // Use its documented cmd wrapper workaround (oven-sh/bun#32011). The
-    // command contains only fixed words and base64; paths stay in env data.
-    const child = bun.spawn(['cmd.exe', '/d', '/s', '/c', command.join(' ')], { env, stdin: null, stdout: 'ignore', stderr: 'ignore' });
-    let timeout: ReturnType<typeof setTimeout>;
-    try {
-      const code = await Promise.race([child.exited, new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => { child.kill('SIGKILL'); reject(privateStateError()); }, 10_000);
-      })]);
-      if (code !== 0) throw privateStateError();
-    } finally { clearTimeout(timeout!); }
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command[0], command.slice(1), { env, stdio: 'ignore', windowsHide: true, shell: false });
-    const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(privateStateError()); }, 10_000);
-    child.once('error', () => { clearTimeout(timeout); reject(privateStateError()); });
-    child.once('close', code => { clearTimeout(timeout); code === 0 ? resolve() : reject(privateStateError()); });
-  });
-}

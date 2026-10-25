@@ -1,15 +1,16 @@
 import { createServer } from 'node:http';
-import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
+import { randomBytes, createHash, timingSafeEqual, generateKeyPairSync, createPublicKey, sign, verify, type KeyObject } from 'node:crypto';
 import { constants, fstatSync, readFileSync, closeSync, realpathSync } from 'node:fs';
 import { openSync } from './guarded-fs.js';
 import path from 'node:path';
 import { fs } from './guarded-fs.js';
 import { isCanonicalPath } from './private-root.js';
-import { openCodePrivateRoot, ensureOpenCodePrivateRoot, verifyOpenCodePrivateWindowsPath, verifyOpenCodePrivateWindowsPathAsync, sameOpenCodeDirectory } from './opencode-private-state.js';
+import { openCodePrivateRoot, ensureOpenCodePrivateRoot, verifyOpenCodePrivateWindowsPath, sameOpenCodeDirectory } from './opencode-private-state.js';
 import { LOG_AUDIT_NUDGE } from './log-audit-core.js';
 import type { OpenCodeV2Transport } from './opencode-v2-transport.js';
 
 export const OPENCODE_V2_DESCRIPTOR_ENV = 'BORG_OPENCODE_V2_DESCRIPTOR';
+export const OPENCODE_V2_VERIFICATION_KEY_ENV = 'BORG_OPENCODE_V2_VERIFICATION_KEY';
 export interface OpenCodeV2Seat { worktree: string; droneId: string; cubeId: string }
 export interface OpenCodeV2Descriptor {
   generation: 2; launch: string; url: string; capability: string;
@@ -29,10 +30,17 @@ export function readOpenCodeV2Descriptor(filename: string): OpenCodeV2Descriptor
   return readValidatedDescriptor(filename);
 }
 
-export async function readOpenCodeV2DescriptorAsync(filename: string): Promise<OpenCodeV2Descriptor> {
-  await verifyOpenCodePrivateWindowsPathAsync(path.dirname(filename));
-  await verifyOpenCodePrivateWindowsPathAsync(filename);
-  return readValidatedDescriptor(filename);
+/** Authenticate the launcher without spawning a Windows process in Bun.
+ * The Node broker checks the actual file ACL before activating this token. */
+export function readOpenCodeV2PluginDescriptor(filename: string, verificationKey: string): OpenCodeV2Descriptor {
+  const data = readValidatedDescriptor(filename) as OpenCodeV2Descriptor & { signature?: string };
+  const { signature, ...payload } = data;
+  try {
+    if (!signature || !/^[\w-]{86}$/.test(signature) || !/^[\w-]{50,128}$/.test(verificationKey)) throw new Error();
+    const key = createPublicKey({ key: Buffer.from(verificationKey, 'base64url'), format: 'der', type: 'spki' });
+    if (key.asymmetricKeyType !== 'ed25519' || !verify(null, Buffer.from(JSON.stringify(payload)), key, Buffer.from(signature, 'base64url'))) throw new Error();
+  } catch { throw new Error('OpenCode plugin descriptor does not match the owning launch.'); }
+  return payload;
 }
 
 function readValidatedDescriptor(filename: string): OpenCodeV2Descriptor {
@@ -87,6 +95,7 @@ export async function startOpenCodeV2Broker(options: {
   server: { pid: number; version: string }; root?: string;
   launch?: string;
   mcpOptions?: Record<string, unknown>;
+  pluginSigningKey?: KeyObject;
   orientation: () => Promise<string>;
 }) {
   const root = options.root ?? openCodePrivateRoot();
@@ -96,11 +105,14 @@ export async function startOpenCodeV2Broker(options: {
   if (!/^[\w-]{43}$/.test(launch)) throw new Error('Invalid OpenCode launch identity');
   const capability = randomBytes(32).toString('base64url');
   const pluginCapability = randomBytes(32).toString('base64url');
+  const pluginSigningKey = options.pluginSigningKey ?? generateKeyPairSync('ed25519').privateKey;
+  const pluginVerificationKey = createPublicKey(pluginSigningKey).export({ type: 'spki', format: 'der' }).toString('base64url');
   const descriptorPath = path.join(root, `opencode-v2-${launch}.json`);
   const pluginDescriptorPath = `${descriptorPath}.plugin`;
   const journalPath = path.join(root, `opencode-v2-${launch}.journal.json`);
   let sessionID = options.sessionID;
   let pluginReady = false;
+  let pluginFileVerified = false;
   let tools: string[] = [];
   let humanHandoff: { sessionID: string; messageID: string } | null = null;
   let revoked = false;
@@ -273,6 +285,11 @@ export async function startOpenCodeV2Broker(options: {
       if (body.launch !== launch) throw new Error('Launch mismatch');
       // Serialize admission, handoff, and audit updates across MCP reconnects.
       const operation = req.url ?? '';
+      if (authenticatedPlugin && (!pluginFileVerified || operation === '/mcp-options')) {
+        const privateDescriptor = readOpenCodeV2Descriptor(pluginDescriptorPath);
+        if (privateDescriptor.capability !== pluginCapability || privateDescriptor.launch !== launch) throw new Error('Plugin descriptor mismatch');
+        pluginFileVerified = true;
+      }
       // Native prompt admission calls plugin hooks before returning. Hook
       // callbacks must be reentrant; putting them behind that same admission
       // promise would deadlock the host. Only wake admissions need the queue.
@@ -288,8 +305,10 @@ export async function startOpenCodeV2Broker(options: {
   const descriptor: OpenCodeV2Descriptor = { generation: 2, launch, capability, seat: options.seat,
     sessionID, server: options.server, url: `http://127.0.0.1:${address.port}` };
   const pluginDescriptor: OpenCodeV2Descriptor = { ...descriptor, capability: pluginCapability };
+  const serializePluginDescriptor = () => JSON.stringify({ ...pluginDescriptor,
+    signature: sign(null, Buffer.from(JSON.stringify(pluginDescriptor)), pluginSigningKey).toString('base64url') });
   fs.writeFileSync(descriptorPath, JSON.stringify(descriptor), { flag: 'wx', mode: 0o600 });
-  fs.writeFileSync(pluginDescriptorPath, JSON.stringify(pluginDescriptor), { flag: 'wx', mode: 0o600 });
+  fs.writeFileSync(pluginDescriptorPath, serializePluginDescriptor(), { flag: 'wx', mode: 0o600 });
   persist();
   const timer = setInterval(() => { const task = serial.then(async () => {
     for (const delivery of deliveries.values()) if (!delivery.delivered && !delivery.settled) {
@@ -297,13 +316,13 @@ export async function startOpenCodeV2Broker(options: {
     }
   }); serial = task.catch(() => {}); }, 3_000);
   timer.unref();
-  return { descriptorPath, descriptor,
+  return { descriptorPath, descriptor, pluginVerificationKey,
     selectSession: async (id: string) => {
       await verifySession(id); sessionID = id; descriptor.sessionID = id;
       pluginDescriptor.sessionID = id;
       const temp = `${descriptorPath}.tmp`;
       fs.writeFileSync(temp, JSON.stringify(descriptor), { mode: 0o600 }); fs.renameSync(temp, descriptorPath);
-      fs.writeFileSync(temp, JSON.stringify(pluginDescriptor), { mode: 0o600 }); fs.renameSync(temp, pluginDescriptorPath);
+      fs.writeFileSync(temp, serializePluginDescriptor(), { mode: 0o600 }); fs.renameSync(temp, pluginDescriptorPath);
       persist();
     },
     call: (operation: string, body: Record<string, unknown> = {}) => callOpenCodeV2Broker(

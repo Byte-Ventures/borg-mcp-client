@@ -1,5 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, generateKeyPairSync } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fs } from './guarded-fs.js';
@@ -8,7 +8,7 @@ import { applyOpenCodeV2LaunchPermissions } from './opencode-v2-permissions.js';
 import { inspectOpenCodeInstallation, verifyOpenCodeExecutableStillMatches, OpenCodeExecutableChangedError, type OpenCodeInstallation } from './opencode-installation.js';
 import { startOpenCodeV2Server } from './opencode-v2-server.js';
 import { createOpenCodeV2Transport } from './opencode-v2-transport.js';
-import { startOpenCodeV2Broker, OPENCODE_V2_DESCRIPTOR_ENV, type OpenCodeV2Seat } from './opencode-v2-broker.js';
+import { startOpenCodeV2Broker, OPENCODE_V2_DESCRIPTOR_ENV, OPENCODE_V2_VERIFICATION_KEY_ENV, type OpenCodeV2Seat } from './opencode-v2-broker.js';
 import { installLaunchOpenCodePlugin, migrateLegacyOpenCodePlugin } from './opencode-launch-plugin.js';
 import { selectOpenCodeAdapter } from './opencode-adapter.js';
 import { borgAgentConfigEnv } from './private-root.js';
@@ -104,7 +104,9 @@ export async function launchOpenCodeV2Process(options: {
     const launch = randomBytes(32).toString('base64url');
     const plugin = installLaunchOpenCodePlugin(2, launch);
     const descriptorPath = path.join(openCodePrivateRoot(), `opencode-v2-${launch}.json`);
-    const env = openCodeV2LaunchOverlay(options.env, descriptorPath, plugin.directory, options.mcpCommand);
+    const pluginKey = generateKeyPairSync('ed25519');
+    const env: NodeJS.ProcessEnv = { ...openCodeV2LaunchOverlay(options.env, descriptorPath, plugin.directory, options.mcpCommand),
+      [OPENCODE_V2_VERIFICATION_KEY_ENV]: pluginKey.publicKey.export({ format: 'der', type: 'spki' }).toString('base64url') };
     // V1's per-launch permission object is not a V2 policy source.
     delete env.OPENCODE_PERMISSION;
     let server: Awaited<ReturnType<typeof startOpenCodeV2Server>> | undefined;
@@ -123,6 +125,7 @@ export async function launchOpenCodeV2Process(options: {
       let sessionID = args.sessionID ?? Session.ID.create();
       phase = 'session broker startup';
       broker = await startOpenCodeV2Broker({ launch, transport, seat, sessionID, mcpOptions,
+        pluginSigningKey: pluginKey.privateKey,
         server: { pid: server.pid!, version: server.version }, orientation: () => renderOrientation(directory, env) });
       phase = 'session selection';
       if (args.continue) {
