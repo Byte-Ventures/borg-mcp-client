@@ -13,6 +13,21 @@ const root = realSeat ? realpathSync(process.env.OPENCODE_TEST_SEAT_HOME) : mkdt
 const directory = realSeat ? realpathSync(process.env.OPENCODE_TEST_SEAT_WORKTREE) : root;
 process.env.BORG_STATE_ROOT = root;
 const requests = [];
+// Only paths/status/timing: never print authorization, request bodies, or API responses.
+const nativeRequests = [];
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const pathname = new URL(typeof input === 'string' || input instanceof URL ? input : input.url).pathname;
+  const started = Date.now();
+  try {
+    const response = await originalFetch(input, init);
+    nativeRequests.push({ pathname, status: response.status, milliseconds: Date.now() - started });
+    return response;
+  } catch (error) {
+    nativeRequests.push({ pathname, error: error.name, milliseconds: Date.now() - started });
+    throw error;
+  }
+};
 let logged = false;
 let searched = false;
 let discoveredPaths = [];
@@ -130,6 +145,10 @@ try {
   assert.ok(JSON.stringify(requests.at(-1).messages).includes('generated declarations'), 'Compaction retains Borg orientation and Code Mode guidance');
   tui.kill(); await launch.cleanup(); launch = undefined;
   await assert.rejects(callOpenCodeV2Broker(descriptor, '/status'));
+} catch (error) {
+  console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12) }));
+  throw error;
 } finally {
+  globalThis.fetch = originalFetch;
   await launch?.cleanup(); provider.closeAllConnections(); await new Promise(resolve => provider.close(resolve)); if (!realSeat) rmSync(root, { recursive: true, force: true });
 }
