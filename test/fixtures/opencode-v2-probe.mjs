@@ -13,6 +13,7 @@ const root = realSeat ? realpathSync(process.env.OPENCODE_TEST_SEAT_HOME) : mkdt
 const directory = realSeat ? realpathSync(process.env.OPENCODE_TEST_SEAT_WORKTREE) : root;
 process.env.BORG_STATE_ROOT = root;
 const requests = [];
+const providerSteps = [];
 // Only paths/status/timing: never print authorization, request bodies, or API responses.
 const nativeRequests = [];
 const originalFetch = globalThis.fetch;
@@ -72,6 +73,9 @@ const provider = createServer(async (req, res) => {
     toolCalls = [{index:0,id:'fixture-log',type:'function',function:{name:'execute',arguments:JSON.stringify({code:`return await ${logPath}({message:'Native OpenCode V2 fixture persisted log',to:'broadcast'});`})}}];
   }
   const shouldCall = toolCalls.length > 0;
+  providerSteps.push({ actionIndex, paths, logPath, shellPath,
+    nudge: /Heads up: (\d+)\+ state-changing/.exec(system)?.[1],
+    discoveredPaths, calls: toolCalls.map(call => call.function.name) });
   res.setHeader('Content-Type', 'text/event-stream');
   for (const chunk of [
     { choices: [{ index: 0, delta: shouldCall ? { role: 'assistant', tool_calls: toolCalls } : { role: 'assistant', content: 'Fixture complete.' }, finish_reason: null }] },
@@ -146,7 +150,7 @@ try {
   tui.kill(); await launch.cleanup(); launch = undefined;
   await assert.rejects(callOpenCodeV2Broker(descriptor, '/status'));
 } catch (error) {
-  console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12) }));
+  console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12), providerSteps: providerSteps.slice(-6) }));
   throw error;
 } finally {
   globalThis.fetch = originalFetch;

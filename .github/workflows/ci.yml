@@ -50,7 +50,7 @@ jobs:
     name: client source (${{ matrix.node-version }})
     runs-on: ubuntu-latest
     env:
-      BORG_E2E: ${{ matrix.node-version == '24.19.0' && '1' || '0' }}
+      BORG_E2E: '0'
     strategy:
       matrix:
         node-version: ['22.13.0', '24.19.0']
@@ -80,7 +80,15 @@ jobs:
         if: matrix.node-version == '24.19.0'
         run: npm run check
 
+      - name: Exercise the real-server wake fleet and native V2 MCP
+        if: matrix.node-version == '24.19.0'
+        env:
+          BORG_E2E: '1'
+        run: timeout 3m npx vitest run __tests__/e2e/wake-path.e2e.test.ts
+
       - name: Run unit tests
+        env:
+          OPENCODE_TEST_V2_BINARY: ''
         run: timeout 8m npm run test:unit
 
       - name: Build readable artifacts
