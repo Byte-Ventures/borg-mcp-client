@@ -1,3 +1,4 @@
+import { captureChildCompletion, type ChildCompletion } from './child-completion.js';
 import { spawn, execFile } from 'node:child_process';
 import { randomBytes, generateKeyPairSync } from 'node:crypto';
 import { realpathSync } from 'node:fs';
@@ -12,22 +13,33 @@ import { startOpenCodeV2Broker, OPENCODE_V2_DESCRIPTOR_ENV, OPENCODE_V2_VERIFICA
 import { installLaunchOpenCodePlugin, migrateLegacyOpenCodePlugin } from './opencode-launch-plugin.js';
 import { selectOpenCodeAdapter } from './opencode-adapter.js';
 import { borgAgentConfigEnv, isCanonicalPath } from './private-root.js';
-import { openCodePrivateRoot, sameOpenCodeDirectory } from './opencode-private-state.js';
+import { openCodePrivateRoot, sameOpenCodeDirectory, openCodeWorktreeDirectory } from './opencode-private-state.js';
 import { resolveMcpBinaryPath, resolveRegenPath } from './self-path.js';
 import { getActiveCube, BORG_LAUNCH_EXPECTED_SEAT_ENV } from './cubes.js';
 import type { ConfigEntry } from '@opencode/client';
 
-export function preserveOpenCodeV2McpOptions(sources: readonly ConfigEntry[]): Record<string, unknown> {
-  const preserved: Record<string, unknown> = {};
-  let environment: Record<string, string> = {};
+export function preserveOpenCodeV2McpOptions(sources: readonly ConfigEntry[], ownedDescriptor?: string,
+  originalInline?: string): Record<string, unknown> {
+  const inline = originalInline ? parseJsonc(originalInline) as any : {};
+  let winner: any;
   for (const source of sources) {
     if (source.type !== 'document') continue;
     const mcp: any = source.info.mcp;
-    const entry = mcp?.servers?.borg ?? mcp?.borg;
-    if (!entry || typeof entry !== 'object') continue;
-    for (const key of ['codemode', 'timeout', 'protocol']) if (entry[key] !== undefined) preserved[key] = entry[key];
-    environment = { ...environment, ...entry.environment };
+    let entry = mcp?.servers?.borg ?? mcp?.borg;
+    // The launcher overlays a complete entry in the inline source. Restore
+    // the user's original inline entry at that exact precedence position.
+    if (ownedDescriptor && entry?.environment?.[OPENCODE_V2_DESCRIPTOR_ENV] === ownedDescriptor) {
+      entry = inline.mcp?.servers?.borg ?? inline.mcp?.borg;
+    }
+    if (entry !== undefined) winner = entry;
   }
+  // Native MCP entries replace earlier entries as a whole, including omitted
+  // optional fields. Carry options only from the winning user entry.
+  const preserved: Record<string, unknown> = {};
+  if (winner && typeof winner === 'object') {
+    for (const key of ['codemode', 'timeout', 'protocol']) if (winner[key] !== undefined) preserved[key] = winner[key];
+  }
+  const environment = { ...winner?.environment };
   delete environment.OPENCODE_PASSWORD; delete environment.OPENCODE_SERVER_PASSWORD;
   return { ...preserved, environment };
 }
@@ -91,16 +103,16 @@ export async function launchOpenCodeV2Process(options: {
   seat?: OpenCodeV2Seat; spawnProcess?: typeof spawn;
   /** Dependency seam for the opt-in native compatibility harness. */
   mcpCommand?: string[];
-}): Promise<{ process: ReturnType<typeof spawn>; cleanup: () => Promise<void> }> {
+}): Promise<{ process: ReturnType<typeof spawn>; cleanup: () => Promise<void>; completion: Promise<ChildCompletion> }> {
   const args = parseOpenCodeV2SessionArgs(options.passthroughArgs ?? []);
   if (options.installation.minor < 1 || (options.installation.minor === 1 && options.installation.patch < 2)) {
     throw new Error('Borg requires OpenCode 2.1.2 or newer for OpenCode 2 integration.');
   }
-  const directory = realpathSync(options.cwd);
+  const cwd = realpathSync(options.cwd);
   const active = options.seat ? null : await getActiveCube();
-  const seat = options.seat ?? { worktree: realpathSync(active?.worktree ?? directory),
+  const seat = options.seat ?? { worktree: realpathSync(active?.worktree ?? cwd),
     droneId: active?.droneId ?? 'unassimilated', cubeId: active?.cubeId ?? 'unassimilated' };
-  if (!sameOpenCodeDirectory(directory, seat.worktree)) throw new Error('OpenCode 2 must launch in the selected drone worktree.');
+  const directory = openCodeWorktreeDirectory(cwd, seat.worktree);
   migrateLegacyOpenCodePlugin();
   let installation = options.installation;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -116,20 +128,27 @@ export async function launchOpenCodeV2Process(options: {
     let broker: Awaited<ReturnType<typeof startOpenCodeV2Broker>> | undefined;
     let phase = 'private server startup';
     let kickoffAttempted = false;
-    const cleanup = async () => {
-      await broker?.close(); await server?.close(); fs.rmSync(plugin.directory, { recursive: true, force: true });
-    };
+    let cleaning: Promise<void> | undefined;
+    const cleanup = () => cleaning ??= (async () => {
+      try { await broker?.close(); } finally {
+        try { await server?.close(); } finally { fs.rmSync(plugin.directory, { recursive: true, force: true }); }
+      }
+    })();
     try {
       if (!isCanonicalPath(env.OPENCODE_DB!)) throw new OpenCodeV2LaunchError('Borg OpenCode 2 database path contains a symlink. No kickoff was submitted.');
       server = await startOpenCodeV2Server({ installation, directory, env });
       phase = 'configuration inspection';
       const transport = await createOpenCodeV2Transport(server);
-      const mcpOptions = preserveOpenCodeV2McpOptions(await transport.client.config.get({ location: { directory } }));
+      const mcpOptions = preserveOpenCodeV2McpOptions(await transport.client.config.get({ location: { directory } }), descriptorPath, options.env.OPENCODE_CONFIG_CONTENT);
       const { Session } = await import('@opencode/schema/session');
       let sessionID = args.sessionID ?? Session.ID.create();
+      const prepareSession = async (id: string) => {
+        for (const warning of await applyOpenCodeV2LaunchPermissions(transport.client, id, directory, options.skipApprovalOverride === true,
+          [directory, ...(options.env.BORG_LAUNCH_SCRATCH ? [options.env.BORG_LAUNCH_SCRATCH] : [])])) console.error(`warning: ${warning}`);
+      };
       phase = 'session broker startup';
       broker = await startOpenCodeV2Broker({ launch, transport, seat, sessionID, mcpOptions,
-        pluginSigningKey: pluginKey.privateKey,
+        pluginSigningKey: pluginKey.privateKey, prepareSession,
         server: { pid: server.pid!, version: server.version }, orientation: () => renderOrientation(directory, env) });
       phase = 'session selection';
       if (args.continue) {
@@ -181,14 +200,14 @@ export async function launchOpenCodeV2Process(options: {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       phase = 'permission inspection';
-      for (const warning of await applyOpenCodeV2LaunchPermissions(transport.client, sessionID, directory, options.skipApprovalOverride === true,
-        [directory, ...(options.env.BORG_LAUNCH_SCRATCH ? [options.env.BORG_LAUNCH_SCRATCH] : [])])) console.error(`warning: ${warning}`);
+      await prepareSession(sessionID);
       const launchArgs = selectOpenCodeAdapter(installation).buildTuiArgs({ directory,
         port: Number(new URL(server.url).port), sessionId: sessionID, prompt: options.prompt, passthroughArgs: args.rest });
       verifyOpenCodeExecutableStillMatches(installation, env);
       phase = 'TUI attachment';
       const child = (options.spawnProcess ?? spawn)(installation.executable, launchArgs,
         { cwd: directory, stdio: 'inherit', shell: false, env: { ...env, ...server.tuiEnv() } });
+      const completion = captureChildCompletion(child);
       let stopped = false;
       child.once('error', () => { stopped = true; void cleanup(); });
       child.once('exit', () => { stopped = true; void cleanup(); });
@@ -200,7 +219,7 @@ export async function launchOpenCodeV2Process(options: {
       phase = 'kickoff admission'; kickoffAttempted = true;
       const admission = await broker.call('/wake', { text: options.prompt, key: 'kickoff', source: 'kickoff', allowSubmit: true });
       if (!admission.accepted) { child.kill(); throw new OpenCodeV2LaunchError('OpenCode 2 kickoff admission could not be confirmed.'); }
-      return { process: child, cleanup };
+      return { process: child, cleanup, completion };
     } catch (error) {
       await cleanup();
       if (error instanceof OpenCodeExecutableChangedError && attempt === 0) {

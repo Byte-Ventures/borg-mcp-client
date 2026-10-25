@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { type ChildCompletion } from './child-completion.js';
 /**
  * Borg CLI launcher
  *
@@ -47,6 +48,7 @@ export declare function launchOpenCodeProcess(options: {
     launchArgs: string[];
     launchEnv: NodeJS.ProcessEnv;
     process: ReturnType<typeof spawn>;
+    completion: Promise<ChildCompletion>;
 }>;
 export declare function runAssimilateEntry(args: readonly string[], buildDeps?: AssimilateDepsBuilder): Promise<number>;
 export declare function ensureResolvedCliConfigured(cli: BorgCli, active?: ActiveCube | null, launchScopedOpenCode?: boolean): void;

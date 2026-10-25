@@ -4,6 +4,7 @@ import type { ActiveCube } from './cubes.js';
 
 export type OpenCodeSeatIdentityErrorCode =
   | 'IDENTITY_HANDSHAKE_TIMEOUT'
+  | 'LAUNCH_BINDING_INVALID'
   | 'ROOTS_UNAVAILABLE'
   | 'ROOTS_INVALID'
   | 'SEAT_NOT_FOUND'

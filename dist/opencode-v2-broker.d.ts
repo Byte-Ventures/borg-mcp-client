@@ -38,6 +38,7 @@ export declare function startOpenCodeV2Broker(options: {
     launch?: string;
     mcpOptions?: Record<string, unknown>;
     pluginSigningKey?: KeyObject;
+    prepareSession?: (sessionID: string) => Promise<void>;
     orientation: () => Promise<string>;
 }): Promise<{
     descriptorPath: string;

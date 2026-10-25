@@ -51,6 +51,8 @@ globalThis.fetch = async (input, init) => {
 };
 let logged = false;
 let searched = false;
+let handoffPending = false;
+let handoffIssued = false;
 let discoveredPaths = [];
 const direct = process.env.OPENCODE_TEST_DIRECT === '1';
 const callsPath = join(root, 'mcp-calls.jsonl');
@@ -95,6 +97,14 @@ const provider = createServer(async (req, res) => {
     logged = true;
     toolCalls = [{index:0,id:'fixture-log',type:'function',function:{name:'execute',arguments:JSON.stringify({code:`return await ${logPath}({message:'Native OpenCode V2 fixture persisted log',to:'broadcast'});`})}}];
   }
+  if (handoffPending && !handoffIssued) {
+    handoffIssued = true;
+    const name = directNames.find(name => name.includes('read-log'));
+    const api = paths.find(name => name.includes('read-log'));
+    assert.ok(direct ? name : api, 'Human session discovers Borg read tool');
+    toolCalls = [{ index: 0, id: 'human-handoff-read', type: 'function', function: direct
+      ? { name, arguments: '{}' } : { name: 'execute', arguments: JSON.stringify({ code: `return await ${api}({});` }) } }];
+  }
   const shouldCall = toolCalls.length > 0;
   providerSteps.push({ actionIndex, paths, logPath, shellPath,
     nudge: /Heads up: (\d+)\+ state-changing/.exec(system)?.[1],
@@ -113,7 +123,7 @@ let launch;
 try {
   const { inspectOpenCodeInstallation } = await import('../../dist/opencode-installation.js');
   const { launchOpenCodeV2Process } = await import('../../dist/opencode-v2-launch.js');
-  const { readOpenCodeV2Descriptor, callOpenCodeV2Broker } = await import('../../dist/opencode-v2-broker.js');
+  const { readOpenCodeV2Descriptor, readOpenCodeV2PluginDescriptor, callOpenCodeV2Broker } = await import('../../dist/opencode-v2-broker.js');
   const { openCodePrivateRoot } = await import('../../dist/opencode-private-state.js');
   let nativeClient;
   let nativeRootHeaders;
@@ -131,12 +141,13 @@ try {
   const installation = inspectOpenCodeInstallation(env, { resolveExecutable: () => realpathSync(binary),
     readVersion: executable => { const { execFileSync } = process.getBuiltinModule('child_process'); return execFileSync(executable, ['--version'], { encoding: 'utf8', env }); } });
   let tui;
-  const launchOptions = { installation, cwd: directory, env, prompt: 'Local integration fixture',
+  const subdirectory = join(directory, 'fixture-src'); mkdirSync(subdirectory, { recursive: true });
+  const launchOptions = { installation, cwd: subdirectory, env, prompt: 'Local integration fixture',
     ...(realSeat ? {} : { mcpCommand: [process.execPath, resolve('test/fixtures/opencode-mcp.mjs'), callsPath] }),
     seat: { worktree: directory, droneId: process.env.OPENCODE_TEST_DRONE_ID ?? 'fixture-drone', cubeId: process.env.OPENCODE_TEST_CUBE_ID ?? 'fixture-cube' },
     spawnProcess: (executable, args, options) => {
       assert.equal(executable, realpathSync(binary)); assert.ok(args.includes('--server')); assert.ok(!args.includes('--prompt'));
-      assert.ok(options.env.OPENCODE_PASSWORD);
+      assert.ok(options.env.OPENCODE_PASSWORD); assert.equal(options.cwd, directory);
       nativeRootHeaders = { Authorization: 'Basic ' + Buffer.from('opencode:' + options.env.OPENCODE_PASSWORD).toString('base64') };
       nativeRootURL = args[args.indexOf('--server') + 1];
       tui = new EventEmitter(); tui.kill = () => { tui.emit('exit', 0); tui.emit('close', 0); return true; };
@@ -187,7 +198,7 @@ try {
   }
   assert.ok(!(await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('Heads up:'));
   const wake = await callOpenCodeV2Broker(descriptor, '/wake', { key:'wake-fixture', text:'Local wake fixture', source:'source-fixture' });
-  const duplicate = await callOpenCodeV2Broker(descriptor, '/wake', { key:'wake-fixture', text:'Local wake fixture', source:'source-fixture' });
+  const duplicate = await callOpenCodeV2Broker(descriptor, '/wake', { key:'wake-fixture-reping', text:'Local wake fixture', source:'source-fixture' });
   assert.equal(duplicate.id, wake.id);
   await nativeClient.session.wait({ sessionID: descriptor.sessionID });
   await nativeClient.session.compact({ sessionID: descriptor.sessionID });
@@ -197,13 +208,18 @@ try {
     // Two actual native hosts share the ordinary user config/data while their
     // worktrees, API credentials, plugin environments, and broker seats differ.
     const otherDirectory = join(root, 'second-worktree'); mkdirSync(otherDirectory);
+    // A complete project entry replaces all optional fields from the global
+    // entry; direct mode above supplied an explicit global codemode=false.
+    writeFileSync(join(otherDirectory, 'opencode.json'), JSON.stringify({ mcp: { servers: { borg: { type: 'local', command: ['project-placeholder'], environment: { BORG_FIXTURE_PROJECT: 'winner' } } } } }));
     let otherURL;
     let otherHeaders;
+    let otherVerificationKey;
     const otherSeat = { worktree: otherDirectory, droneId: 'second-fixture-drone', cubeId: 'fixture-cube' };
-    const other = await launchOpenCodeV2Process({ installation, cwd: otherDirectory, env,
+    const other = await launchOpenCodeV2Process({ installation, cwd: otherDirectory, env: { ...env, OPENCODE_DISABLE_PROJECT_CONFIG: '0' },
       prompt: 'Concurrent native host fixture', seat: otherSeat,
       mcpCommand: [process.execPath, resolve('test/fixtures/opencode-mcp.mjs'), join(root, 'other-mcp-calls.jsonl')],
       spawnProcess: (_executable, args, options) => {
+        otherVerificationKey = options.env.BORG_OPENCODE_V2_VERIFICATION_KEY;
         otherURL = args[args.indexOf('--server') + 1];
         otherHeaders = { Authorization: 'Basic ' + Buffer.from('opencode:' + options.env.OPENCODE_PASSWORD).toString('base64') };
         const child = new EventEmitter(); child.kill = () => { child.emit('exit', 0); child.emit('close', 0); return true; };
@@ -213,6 +229,9 @@ try {
       const otherDescriptorPath = readdirSync(openCodePrivateRoot()).map(name => join(openCodePrivateRoot(), name))
         .find(filename => filename !== descriptorPath && /opencode-v2-[\w-]{43}\.json$/.test(filename));
       const otherDescriptor = readOpenCodeV2Descriptor(otherDescriptorPath);
+      const otherPlugin = readOpenCodeV2PluginDescriptor(otherDescriptorPath + '.plugin', otherVerificationKey);
+      const preserved = await callOpenCodeV2Broker(otherPlugin, '/mcp-options');
+      assert.deepEqual(preserved, { environment: { BORG_FIXTURE_PROJECT: 'winner' } }, 'Whole winning project entry replaces global MCP options');
       assert.notEqual(otherDescriptor.url, descriptor.url); assert.notEqual(otherDescriptor.capability, descriptor.capability);
       assert.notEqual(otherDescriptor.sessionID, descriptor.sessionID);
       assert.equal((await fetch(`${otherURL}/api/info`, { headers: nativeRootHeaders })).status, 401);
@@ -266,6 +285,21 @@ try {
       await closed; clearTimeout(timeout);
     }
     assert.ok((await callOpenCodeV2Broker(descriptor, '/status')).pluginReady, 'Closing V1 leaves the V2 launch active');
+  }
+  if (!realSeat) {
+    const { SessionMessage } = await import('@opencode/schema/session-message');
+    const { effectiveOpenCodeV2Permission } = await import('../../dist/opencode-v2-permissions.js');
+    const human = await nativeClient.session.create({ location: { directory }, title: 'Human-selected Borg root' });
+    const before = readFileSync(callsPath, 'utf8').trim().split('\n').length;
+    handoffPending = true;
+    await nativeClient.session.prompt({ sessionID: human.id, id: SessionMessage.ID.create(), text: 'Human-selected session policy fixture' });
+    await nativeClient.session.wait({ sessionID: human.id }, { signal: AbortSignal.timeout(20_000) });
+    handoffPending = false;
+    assert.equal((await callOpenCodeV2Broker(descriptor, '/status')).sessionID, human.id);
+    const updated = await nativeClient.session.get({ sessionID: human.id });
+    assert.equal(effectiveOpenCodeV2Permission(updated.permissions ?? [], 'borg_borg_read-log'), 'allow');
+    const newCalls = readFileSync(callsPath, 'utf8').trim().split('\n').slice(before).map(line => JSON.parse(line));
+    assert.ok(newCalls.some(call => call.name === 'borg_read-log' && call.meta?.['ai.opencode/sessionID'] === human.id), 'First Borg call in a human-selected root receives launch policy');
   }
   tui.kill(); await launch.cleanup(); launch = undefined;
   await assert.rejects(callOpenCodeV2Broker(descriptor, '/status'));

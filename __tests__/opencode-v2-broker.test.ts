@@ -13,7 +13,7 @@ let broker: Awaited<ReturnType<typeof startOpenCodeV2Broker>> | undefined;
 beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-v2-broker-'))); });
 afterEach(async () => { await broker?.close(); broker = undefined; rmSync(root, { recursive: true, force: true }); });
 
-async function fixture() {
+async function fixture(prepareSession?: (id: string) => Promise<void>) {
   const seat = { worktree: root, cubeId: 'cube', droneId: 'drone' };
   const sessions = new Map<string, any>([['ses_root', { id: 'ses_root', location: { directory: root } }]]);
   const messages = new Map<string, any>();
@@ -25,7 +25,7 @@ async function fixture() {
     client: { session: { get: vi.fn(async ({ sessionID }) => {
       if (!sessions.has(sessionID)) throw new Error('Missing'); return sessions.get(sessionID);
     }), prompt, inbox: { list: vi.fn(async () => inbox) } } } };
-  broker = await startOpenCodeV2Broker({ root, seat, transport, sessionID: 'ses_root', server: { pid: 123, version: '2.1.2' }, orientation: async () => 'Borg orientation' });
+  broker = await startOpenCodeV2Broker({ root, seat, transport, sessionID: 'ses_root', prepareSession, server: { pid: 123, version: '2.1.2' }, orientation: async () => 'Borg orientation' });
   await broker.call('/ready'); await broker.call('/catalog', { tools: ['borg_borg_log'] });
   return { seat, sessions, messages, inbox, prompt, transport, broker };
 }
@@ -104,6 +104,47 @@ describe('OpenCode 2 session broker', () => {
     expect(await broker.call('/status')).toMatchObject({ pending: 0 });
     await broker.call('/wake', { key: 'entry', text: 'wake text' });
     expect(prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates changing reping nonces by durable source, including timeout, handoff and settlement', async () => {
+    const { broker, prompt, sessions, messages, seat } = await fixture();
+    prompt.mockImplementationOnce(async () => { throw new Error('Ambiguous admission'); });
+    const first = await broker.call('/wake', { key: 'nonce1', source: 'log1', text: 'same text' });
+    expect(first.accepted).toBe(false);
+    const [second, third] = await Promise.all(['nonce2', 'nonce3'].map(key => broker.call('/wake', { key, source: 'log1', text: 'same text' })));
+    expect(second.id).toBe(first.id); expect(third.id).toBe(first.id);
+    expect(prompt).toHaveBeenCalledTimes(2);
+    expect(prompt.mock.calls.every(([input]) => input.id === first.id && input.sessionID === 'ses_root')).toBe(true);
+    await broker.call('/bind', { seat });
+    sessions.set('ses_new', { id: 'ses_new', location: { directory: root } });
+    messages.set('msg_human', { role: 'user', metadata: {} });
+    await broker.call('/human', { sessionID: 'ses_new', messageID: 'msg_human' });
+    const repeat = await broker.call('/wake', { key: 'nonce4', source: 'log1', text: 'same text' });
+    expect(repeat.id).toBe(first.id); expect(prompt).toHaveBeenCalledTimes(2);
+    await broker.call('/settle', { source: 'log1' });
+    expect(await broker.call('/wake', { key: 'nonce5', source: 'log1', text: 'same text' })).toMatchObject({ id: first.id, settled: true });
+    await expect(broker.call('/wake', { key: 'nonce6', source: 'log1', text: 'changed' })).rejects.toThrow();
+    await expect(broker.call('/wake', { key: 'nonce1', source: 'other', text: 'same text' })).rejects.toThrow();
+    expect(prompt).toHaveBeenCalledTimes(2);
+  });
+
+  it('prepares policy only after durable human proof and refuses a failed handoff', async () => {
+    let release!: () => void;
+    const prepare = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));
+    const { broker, sessions, messages } = await fixture(prepare);
+    sessions.set('ses_new', { id: 'ses_new', location: { directory: root } });
+    await broker.call('/human', { sessionID: 'ses_new', messageID: 'msg_human' });
+    await broker.call('/status'); expect(prepare).not.toHaveBeenCalled();
+    messages.set('msg_human', { role: 'user', metadata: {} });
+    const context = broker.call('/context', { sessionID: 'ses_new' });
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledWith('ses_new'));
+    release(); expect((await context).text).toContain('Borg orientation');
+    expect((await broker.call('/status')).sessionID).toBe('ses_new');
+    sessions.set('ses_failed', { id: 'ses_failed', location: { directory: root } });
+    messages.set('msg_failed', { role: 'user', metadata: {} });
+    prepare.mockRejectedValueOnce(new Error('Policy refused'));
+    await broker.call('/human', { sessionID: 'ses_failed', messageID: 'msg_failed' });
+    await expect(broker.call('/wake', { key: 'failed', text: 'do not admit' })).rejects.toThrow();
   });
 
   it('counts actual completed nested operations once and resets only on a persisted log notification', async () => {

@@ -96,6 +96,7 @@ export async function startOpenCodeV2Broker(options: {
   launch?: string;
   mcpOptions?: Record<string, unknown>;
   pluginSigningKey?: KeyObject;
+  prepareSession?: (sessionID: string) => Promise<void>;
   orientation: () => Promise<string>;
 }) {
   const root = options.root ?? openCodePrivateRoot();
@@ -116,13 +117,15 @@ export async function startOpenCodeV2Broker(options: {
   let tools: string[] = [];
   let humanHandoff: { sessionID: string; messageID: string } | null = null;
   let revoked = false;
+  // Durable log source owns the native ID; reping nonces are only aliases.
   const deliveries = new Map<string, Delivery>();
+  const aliases = new Map<string, string>();
   const audits = new Map<string, Audit>();
   let serial = Promise.resolve();
   const persist = () => {
     const temp = `${journalPath}.tmp`;
     fs.writeFileSync(temp, JSON.stringify({ generation: 2, launch, server: options.server,
-      seat: options.seat, sessionID, deliveries: [...deliveries], audits: [...audits] }), { mode: 0o600 });
+      seat: options.seat, sessionID, deliveries: [...deliveries], aliases: [...aliases], audits: [...audits] }), { mode: 0o600 });
     fs.renameSync(temp, journalPath);
   };
   const verifySession = async (id: string) => {
@@ -156,12 +159,15 @@ export async function startOpenCodeV2Broker(options: {
     } catch { await reconcile(delivery); }
   };
   const nudge = (id: string) => (audits.get(id)?.material ?? 0) >= 3 ? LOG_AUDIT_NUDGE(audits.get(id)!.material) : '';
-  const resolveHandoff = async () => {
+  const resolveHandoff = async (): Promise<void> => {
     const handoff = humanHandoff;
     if (!handoff) return;
     const message = await options.transport.message(handoff.sessionID, handoff.messageID);
     if (!message || message.role !== 'user' || message.metadata.borgOpenCodeInjectedEntry === true) return;
     await verifySession(handoff.sessionID);
+    if (handoff.sessionID !== sessionID) await options.prepareSession?.(handoff.sessionID);
+    // A newer human prompt may arrive while permissions are being prepared.
+    if (humanHandoff !== handoff) return resolveHandoff();
     sessionID = handoff.sessionID; humanHandoff = null; persist();
   };
   const material = new Set(['shell', 'bash', 'edit', 'write', 'apply_patch', 'exec_command', 'multiedit', 'notebookedit']);
@@ -253,13 +259,17 @@ export async function startOpenCodeV2Broker(options: {
       if (body.key !== 'readiness' && options.seat.droneId !== 'unassimilated' &&
         body.allowSubmit !== false && (!pluginReady || tools.length === 0)) return { accepted: false };
       if (typeof body.text !== 'string' || !body.text.trim() || typeof body.key !== 'string') throw new Error('Invalid wake');
-      let delivery = deliveries.get(body.key);
+      const source = typeof body.source === 'string' ? body.source : aliases.get(body.key) ?? body.key;
+      if (aliases.has(body.key) && aliases.get(body.key) !== source) throw new Error('Wake identity changed source');
+      let delivery = deliveries.get(source);
+      if (delivery && delivery.text !== body.text) throw new Error('Wake source changed text');
       if (!delivery) {
         if (body.allowSubmit === false) return { accepted: false };
         delivery = { id: options.transport.nextMessageID(), sessionID, text: body.text,
-          source: typeof body.source === 'string' ? body.source : body.key, admitted: false, delivered: false, settled: false };
-        deliveries.set(body.key, delivery); persist();
+          source, admitted: false, delivered: false, settled: false };
+        deliveries.set(source, delivery); persist();
       }
+      aliases.set(body.key, source); persist();
       if (body.allowSubmit === false) await reconcile(delivery);
       else await submit(delivery, body.key === 'readiness' ? false : body.resume);
       return { accepted: delivery.admitted || delivery.delivered, delivered: delivery.delivered, settled: delivery.settled, id: delivery.id };

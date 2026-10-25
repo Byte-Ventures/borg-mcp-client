@@ -109,13 +109,15 @@ export async function startOpenCodeV2Broker(options) {
     let tools = [];
     let humanHandoff = null;
     let revoked = false;
+    // Durable log source owns the native ID; reping nonces are only aliases.
     const deliveries = new Map();
+    const aliases = new Map();
     const audits = new Map();
     let serial = Promise.resolve();
     const persist = () => {
         const temp = `${journalPath}.tmp`;
         fs.writeFileSync(temp, JSON.stringify({ generation: 2, launch, server: options.server,
-            seat: options.seat, sessionID, deliveries: [...deliveries], audits: [...audits] }), { mode: 0o600 });
+            seat: options.seat, sessionID, deliveries: [...deliveries], aliases: [...aliases], audits: [...audits] }), { mode: 0o600 });
         fs.renameSync(temp, journalPath);
     };
     const verifySession = async (id) => {
@@ -169,6 +171,11 @@ export async function startOpenCodeV2Broker(options) {
         if (!message || message.role !== 'user' || message.metadata.borgOpenCodeInjectedEntry === true)
             return;
         await verifySession(handoff.sessionID);
+        if (handoff.sessionID !== sessionID)
+            await options.prepareSession?.(handoff.sessionID);
+        // A newer human prompt may arrive while permissions are being prepared.
+        if (humanHandoff !== handoff)
+            return resolveHandoff();
         sessionID = handoff.sessionID;
         humanHandoff = null;
         persist();
@@ -296,15 +303,22 @@ export async function startOpenCodeV2Broker(options) {
                 return { accepted: false };
             if (typeof body.text !== 'string' || !body.text.trim() || typeof body.key !== 'string')
                 throw new Error('Invalid wake');
-            let delivery = deliveries.get(body.key);
+            const source = typeof body.source === 'string' ? body.source : aliases.get(body.key) ?? body.key;
+            if (aliases.has(body.key) && aliases.get(body.key) !== source)
+                throw new Error('Wake identity changed source');
+            let delivery = deliveries.get(source);
+            if (delivery && delivery.text !== body.text)
+                throw new Error('Wake source changed text');
             if (!delivery) {
                 if (body.allowSubmit === false)
                     return { accepted: false };
                 delivery = { id: options.transport.nextMessageID(), sessionID, text: body.text,
-                    source: typeof body.source === 'string' ? body.source : body.key, admitted: false, delivered: false, settled: false };
-                deliveries.set(body.key, delivery);
+                    source, admitted: false, delivered: false, settled: false };
+                deliveries.set(source, delivery);
                 persist();
             }
+            aliases.set(body.key, source);
+            persist();
             if (body.allowSubmit === false)
                 await reconcile(delivery);
             else

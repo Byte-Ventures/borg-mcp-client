@@ -25,10 +25,16 @@ export async function applyOpenCodeV2LaunchPermissions(client: OpenCodeClient, s
   const access: OpenCodeV2Permission[] = [];
   for (const pathname of new Set(accessDirectories)) {
     if (!isCanonicalPath(pathname)) throw new Error('OpenCode launch access directory is not canonical.');
+    if (/[*?]/.test(pathname)) {
+      warnings.push('OpenCode launch directory contains permission wildcard characters. Configure external_directory permissions yourself before accessing it.');
+      continue;
+    }
     const resource = `${pathname.replace(/\\/g, '/').replace(/\/$/, '')}/*`;
     const explicit = rules.some(rule => matches(rule.action, 'external_directory') && rule.resource !== '*' &&
       matches(rule.resource, resource) && rule.effect !== 'allow');
-    if (!explicit && effectiveOpenCodeV2Permission(rules, 'external_directory', resource) !== 'allow') {
+    const decision = effectiveOpenCodeV2Permission(rules, 'external_directory', resource);
+    if (decision === 'deny') warnings.push('OpenCode denies access to a launch directory. Borg will preserve this; configure external_directory permissions yourself if access is required.');
+    if (!explicit && decision === 'ask') {
       access.push({ action: 'external_directory', resource, effect: 'allow' });
     }
   }

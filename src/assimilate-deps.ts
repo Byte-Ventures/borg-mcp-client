@@ -151,13 +151,10 @@ export function buildDefaultAssimilateDeps(
             port: await allocateOpenCodePort(), passthroughArgs: [], installation,
             droneLabel: (await cubesGetActive())?.droneLabel ?? 'opencode', cubeName: (await cubesGetActive())?.name ?? 'borg',
             kickoff: createOpenCodeLaunchKickoff(options.prompt) });
-      return new Promise<number>((resolve, reject) => {
-        launch.process.once('error', reject);
-        launch.process.once('exit', async (code) => {
-          if ('cleanup' in launch) await launch.cleanup();
-          resolve(code ?? 0);
-        });
-      });
+      const outcome = await launch.completion;
+      if ('cleanup' in launch) await launch.cleanup();
+      if (outcome.kind === 'error') throw outcome.error;
+      return outcome.code ?? 0;
     },
     exec: (cmd, args, cwd, env) =>
       new Promise<number>((resolveExit, rejectExit) => {

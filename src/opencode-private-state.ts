@@ -22,6 +22,18 @@ export function sameOpenCodeDirectory(left: string, right: string): boolean {
   const normalized = (value: string) => value.replace(/^\\\\\?\\/, '').replace(/^[A-Z]:/, drive => drive.toLowerCase());
   return normalized(a) === normalized(b);
 }
+/** Authorize descendants by physical ancestry, including Windows directory IDs. */
+export function openCodeWorktreeDirectory(cwd: string, worktree: string): string {
+  const root = realpathSync(worktree);
+  let current = realpathSync(cwd);
+  for (;;) {
+    if (sameOpenCodeDirectory(current, root)) return root;
+    const parent = path.dirname(current);
+    if (parent === current) throw new Error('OpenCode 2 must launch within the selected drone worktree.');
+    current = parent;
+  }
+}
+
 function windowsAclScript(initialize: boolean): string {
   return `
 $ErrorActionPreference = 'Stop'

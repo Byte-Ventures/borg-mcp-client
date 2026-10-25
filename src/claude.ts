@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { captureChildCompletion, type ChildCompletion } from './child-completion.js';
 /**
  * Borg CLI launcher
  *
@@ -165,6 +166,7 @@ export async function launchOpenCodeProcess(options: {
   launchArgs: string[];
   launchEnv: NodeJS.ProcessEnv;
   process: ReturnType<typeof spawn>;
+  completion: Promise<ChildCompletion>;
 }> {
   let port = options.port;
   let lastExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
@@ -187,26 +189,14 @@ export async function launchOpenCodeProcess(options: {
       [OPENCODE_SERVER_PASSWORD_ENV]: attemptKickoff.apiPassword,
       [BORG_OPENCODE_LAUNCH_CORRELATION_ENV]: attemptKickoff.correlationIdentity,
       ...(launchPlugin ? { BORG_OPENCODE_PLUGIN_MODE: 'launch',
-        OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...overlay, plugin: [...(overlay.plugin ?? []), launchPlugin.entrypoint],
-          mcp: { ...overlay.mcp, borg: { ...overlay.mcp?.borg,
-            environment: { ...overlay.mcp?.borg?.environment, BORG_OPENCODE_PLUGIN_MODE: 'launch' } } } }) } : {}),
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...overlay, plugin: [...(overlay.plugin ?? []), launchPlugin.entrypoint] }) } : {}),
     };
     const child = (options.spawnProcess ?? spawn)(options.installation?.executable ?? 'opencode', plan.launchArgs, {
       stdio: 'inherit',
       shell: false,
       env: launchEnv,
     });
-    type Stopped =
-      | { kind: 'error'; error: NodeJS.ErrnoException }
-      | { kind: 'exit'; code: number | null; signal: NodeJS.Signals | null };
-    let markStopped: (outcome: Stopped) => void;
-    const stopped = new Promise<Stopped>((resolve) => { markStopped = resolve; });
-    const onError = (error: NodeJS.ErrnoException) => markStopped({ kind: 'error', error });
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      markStopped({ kind: 'exit', code, signal });
-    };
-    child.once('error', onError);
-    child.once('exit', onExit);
+    const stopped = captureChildCompletion(child);
     const cleanPlugin = () => { if (launchPlugin) fs.rmSync(launchPlugin.directory, { recursive: true, force: true }); };
     child.once('close', cleanPlugin);
     child.once('exit', cleanPlugin);
@@ -225,10 +215,8 @@ export async function launchOpenCodeProcess(options: {
       ),
       stopped,
     ]);
-    child.off('error', onError);
-    child.off('exit', onExit);
     if (outcome.kind === 'ready') {
-      return { launchArgs: plan.launchArgs, launchEnv, process: child };
+      return { launchArgs: plan.launchArgs, launchEnv, process: child, completion: stopped };
     }
     if (outcome.kind === 'unbound') {
       child.kill();
@@ -785,8 +773,8 @@ async function main() {
         ...(active ? { seat: { worktree: active.worktree ?? findProjectRoot(), cubeId: active.cubeId, droneId: active.droneId } } : {}) })
     : null;
   if (v2Launch) openCodeCleanup = v2Launch.cleanup;
-  const agentProcess = v2Launch?.process ?? (cli === 'opencode' && openCodeKickoff && openCodePort !== undefined
-    ? (await launchOpenCodeProcess({
+  const v1Launch = cli === 'opencode' && !v2Launch && openCodeKickoff && openCodePort !== undefined
+    ? await launchOpenCodeProcess({
         cwd: process.cwd(),
         port: openCodePort,
         prompt: openCodeKickoff.prompt,
@@ -796,10 +784,12 @@ async function main() {
         cubeName: active?.name ?? 'borg',
         kickoff: openCodeKickoff,
         installation: openCodeInstallation,
-      })).process
-    : spawn(cli === 'opencode' ? openCodeInstallation!.executable : cli, launchArgs, { stdio: 'inherit', shell: false, env: launchEnv }));
-
-  agentProcess.on('error', (err: NodeJS.ErrnoException) => {
+      }) : null;
+  const agentProcess = v2Launch?.process ?? v1Launch?.process ?? spawn(cli, launchArgs, { stdio: 'inherit', shell: false, env: launchEnv });
+  const completion = v2Launch?.completion ?? v1Launch?.completion ?? captureChildCompletion(agentProcess);
+  const outcome = await completion;
+  if (outcome.kind === 'error') {
+    const err = outcome.error as NodeJS.ErrnoException;
     if (codexServerCleanup) {
       try {
         codexServerCleanup();
@@ -815,19 +805,17 @@ async function main() {
       console.error(`${consolePrefix()}${chalk.red(`\n◼ Failed to launch ${cli}: ${err.message}\n`)}`);
     }
     process.exit(1);
-  });
+  }
 
-  agentProcess.on('exit', async (code) => {
-    await openCodeCleanup?.();
-    if (codexServerCleanup) {
-      try {
-        codexServerCleanup();
-      } catch {
-        // best-effort
-      }
+  await openCodeCleanup?.();
+  if (codexServerCleanup) {
+    try {
+      codexServerCleanup();
+    } catch {
+      // best-effort
     }
-    process.exit(code ?? 0);
-  });
+  }
+  process.exit(outcome.code ?? 0);
 }
 
 export function ensureResolvedCliConfigured(cli: BorgCli, active: ActiveCube | null = null, launchScopedOpenCode = false): void {

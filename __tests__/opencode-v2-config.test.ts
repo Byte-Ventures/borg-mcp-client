@@ -110,3 +110,34 @@ it('preserves child-directory denials and ordered exceptions inside a launch gra
     expect(effectiveOpenCodeV2Permission(permissions, 'external_directory', `${prefix}/private/public/file`)).toBe('allow');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+it.each([false, true])('preserves global directory denies with skipOverride=%s', async skip => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-oc-deny-')));
+  try {
+    const rules = [
+      { action: '*', resource: '*', effect: 'allow' as const },
+      { action: 'external_directory', resource: '*', effect: 'deny' as const },
+      { action: 'external_directory', resource: root.replace(/\\/g, '/') + '/public/*', effect: 'allow' as const },
+    ];
+    const update = vi.fn();
+    const client: any = { session: { get: async () => ({ permissions: [] }), update }, config: { get: async () => [] },
+      agent: { get: async () => ({ data: { permissions: rules } }) } };
+    expect((await applyOpenCodeV2LaunchPermissions(client, 'ses_a', root, skip, [root])).join(' ')).toContain('denies access');
+    expect(update).not.toHaveBeenCalled();
+    expect(effectiveOpenCodeV2Permission(rules, 'external_directory', root.replace(/\\/g, '/') + '/private/file')).toBe('deny');
+    expect(effectiveOpenCodeV2Permission(rules, 'external_directory', root.replace(/\\/g, '/') + '/public/file')).toBe('allow');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each(['seat?', 'seat*'])('declines literal wildcard directory %s without granting a sibling', async name => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-oc-literal-')));
+  try {
+    const update = vi.fn();
+    const rules = [{ action: 'external_directory', resource: '*', effect: 'ask' as const }];
+    const client: any = { session: { get: async () => ({ permissions: [] }), update }, config: { get: async () => [] },
+      agent: { get: async () => ({ data: { permissions: rules } }) } };
+    expect((await applyOpenCodeV2LaunchPermissions(client, 'ses_a', root, true, [join(root, name)])).join(' ')).toContain('wildcard');
+    expect(update).not.toHaveBeenCalled();
+    expect(effectiveOpenCodeV2Permission(rules, 'external_directory', join(root, 'seatX/file'))).toBe('ask');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

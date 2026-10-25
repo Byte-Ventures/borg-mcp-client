@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { captureChildCompletion } from './child-completion.js';
 /**
  * Borg CLI launcher
  *
@@ -108,23 +109,14 @@ export async function launchOpenCodeProcess(options) {
             [OPENCODE_SERVER_PASSWORD_ENV]: attemptKickoff.apiPassword,
             [BORG_OPENCODE_LAUNCH_CORRELATION_ENV]: attemptKickoff.correlationIdentity,
             ...(launchPlugin ? { BORG_OPENCODE_PLUGIN_MODE: 'launch',
-                OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...overlay, plugin: [...(overlay.plugin ?? []), launchPlugin.entrypoint],
-                    mcp: { ...overlay.mcp, borg: { ...overlay.mcp?.borg,
-                            environment: { ...overlay.mcp?.borg?.environment, BORG_OPENCODE_PLUGIN_MODE: 'launch' } } } }) } : {}),
+                OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...overlay, plugin: [...(overlay.plugin ?? []), launchPlugin.entrypoint] }) } : {}),
         };
         const child = (options.spawnProcess ?? spawn)(options.installation?.executable ?? 'opencode', plan.launchArgs, {
             stdio: 'inherit',
             shell: false,
             env: launchEnv,
         });
-        let markStopped;
-        const stopped = new Promise((resolve) => { markStopped = resolve; });
-        const onError = (error) => markStopped({ kind: 'error', error });
-        const onExit = (code, signal) => {
-            markStopped({ kind: 'exit', code, signal });
-        };
-        child.once('error', onError);
-        child.once('exit', onExit);
+        const stopped = captureChildCompletion(child);
         const cleanPlugin = () => { if (launchPlugin)
             fs.rmSync(launchPlugin.directory, { recursive: true, force: true }); };
         child.once('close', cleanPlugin);
@@ -142,10 +134,8 @@ export async function launchOpenCodeProcess(options) {
             (options.injectKickoff ?? injectInitialKickoff)(attemptKickoff).then((bound) => bound ? { kind: 'ready' } : { kind: 'unbound' }),
             stopped,
         ]);
-        child.off('error', onError);
-        child.off('exit', onExit);
         if (outcome.kind === 'ready') {
-            return { launchArgs: plan.launchArgs, launchEnv, process: child };
+            return { launchArgs: plan.launchArgs, launchEnv, process: child, completion: stopped };
         }
         if (outcome.kind === 'unbound') {
             child.kill();
@@ -630,8 +620,8 @@ async function main() {
         : null;
     if (v2Launch)
         openCodeCleanup = v2Launch.cleanup;
-    const agentProcess = v2Launch?.process ?? (cli === 'opencode' && openCodeKickoff && openCodePort !== undefined
-        ? (await launchOpenCodeProcess({
+    const v1Launch = cli === 'opencode' && !v2Launch && openCodeKickoff && openCodePort !== undefined
+        ? await launchOpenCodeProcess({
             cwd: process.cwd(),
             port: openCodePort,
             prompt: openCodeKickoff.prompt,
@@ -641,9 +631,12 @@ async function main() {
             cubeName: active?.name ?? 'borg',
             kickoff: openCodeKickoff,
             installation: openCodeInstallation,
-        })).process
-        : spawn(cli === 'opencode' ? openCodeInstallation.executable : cli, launchArgs, { stdio: 'inherit', shell: false, env: launchEnv }));
-    agentProcess.on('error', (err) => {
+        }) : null;
+    const agentProcess = v2Launch?.process ?? v1Launch?.process ?? spawn(cli, launchArgs, { stdio: 'inherit', shell: false, env: launchEnv });
+    const completion = v2Launch?.completion ?? v1Launch?.completion ?? captureChildCompletion(agentProcess);
+    const outcome = await completion;
+    if (outcome.kind === 'error') {
+        const err = outcome.error;
         if (codexServerCleanup) {
             try {
                 codexServerCleanup();
@@ -661,19 +654,17 @@ async function main() {
             console.error(`${consolePrefix()}${chalk.red(`\n◼ Failed to launch ${cli}: ${err.message}\n`)}`);
         }
         process.exit(1);
-    });
-    agentProcess.on('exit', async (code) => {
-        await openCodeCleanup?.();
-        if (codexServerCleanup) {
-            try {
-                codexServerCleanup();
-            }
-            catch {
-                // best-effort
-            }
+    }
+    await openCodeCleanup?.();
+    if (codexServerCleanup) {
+        try {
+            codexServerCleanup();
         }
-        process.exit(code ?? 0);
-    });
+        catch {
+            // best-effort
+        }
+    }
+    process.exit(outcome.code ?? 0);
 }
 export function ensureResolvedCliConfigured(cli, active = null, launchScopedOpenCode = false) {
     const label = cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex' : 'OpenCode';
