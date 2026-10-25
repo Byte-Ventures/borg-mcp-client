@@ -70,6 +70,12 @@ jobs:
         if: matrix.node-version == '24.19.0'
         run: npm audit --audit-level=high
 
+      - name: Install native OpenCode for the real-server wake fleet gate
+        if: matrix.node-version == '24.19.0'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/opencode-fleet" --save-exact @opencode/cli@2.1.2
+          echo "OPENCODE_TEST_V2_BINARY=$RUNNER_TEMP/opencode-fleet/node_modules/@opencode/cli/bin/opencode.exe" >> "$GITHUB_ENV"
+
       - name: Check source types
         if: matrix.node-version == '24.19.0'
         run: npm run check
@@ -88,3 +94,51 @@ jobs:
       - name: Verify installed package artifact
         if: matrix.node-version == '24.19.0'
         run: npm run verify:package
+
+  opencode-native:
+    name: OpenCode ${{ matrix.opencode }} (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['22.13.0', '24.19.0']
+        opencode: ['2.1.2', '2.1.4']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Install the published native compatibility fixture
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/opencode" --save-exact "@opencode/cli@${{ matrix.opencode }}"
+          echo "OPENCODE_TEST_V2_BINARY=$RUNNER_TEMP/opencode/node_modules/@opencode/cli/bin/opencode.exe" >> "$GITHUB_ENV"
+      - name: Check descriptors, permissions, leases, and migration
+        shell: bash
+        run: npx vitest run __tests__/opencode-v2-broker.test.ts __tests__/opencode-v2-config.test.ts __tests__/opencode-v2-server.test.ts
+      - name: Exercise native Code Mode and direct tools with a local provider
+        shell: bash
+        run: |
+          node test/fixtures/opencode-v2-probe.mjs
+          OPENCODE_TEST_DIRECT=1 node test/fixtures/opencode-v2-probe.mjs
+
+  opencode-v1:
+    name: OpenCode V1 retained (${{ matrix.opencode }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        opencode: ['1.18.15', '1.19.3', '1.19.4']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.13.0'
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Measure the published V1 function plugin and history contract
+        run: |
+          npm install --prefix "$RUNNER_TEMP/opencode-v1" --save-exact "opencode-ai@${{ matrix.opencode }}"
+          OPENCODE_TEST_V1_BINARY="$RUNNER_TEMP/opencode-v1/node_modules/.bin/opencode" node test/fixtures/opencode-v1-probe.mjs

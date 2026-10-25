@@ -30,6 +30,13 @@ export interface DocsSection {
 
 export const DOCS_SECTIONS: DocsSection[] = [
   {
+    slug: "opencode",
+    title: "OpenCode 1 and 2 integration",
+    url: `${REPOSITORY_URL}/blob/main/docs/OPENCODE.md`,
+    summary: "OpenCode version selection, V2 private servers, Code Mode, permissions, session resume, and plugin migration.",
+    keywords: ["opencode", "code mode", "codemode", "opencode 2", "opencode v2", "plugin migration"],
+  },
+  {
     slug: "overview",
     title: "Overview",
     url: `${SITE_URL}/docs/`,

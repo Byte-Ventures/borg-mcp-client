@@ -91,6 +91,11 @@ For client-specific recovery details, see
 
 ## Agent Permissions
 
+OpenCode 1 and OpenCode 2.1.2+ are supported. Borg selects the installed
+executable's version on every launch. V2 keeps native Code Mode and uses a private
+server per drone. See [OpenCode integration](docs/OPENCODE.md) for session resume,
+Code Mode, permissions, upgrades, and configuration recovery.
+
 Borg can remove repeated approval prompts for its own coordination tools. It
 does not approve shell commands, file operations, or web access.
 

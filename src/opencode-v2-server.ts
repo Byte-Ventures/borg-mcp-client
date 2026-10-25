@@ -14,6 +14,8 @@ export interface OpenCodeV2Server {
   readonly version: string;
   /** In-memory only. Never put these headers in a binding or diagnostic. */
   headers(): Record<string, string>;
+  /** Authentication for the attached TUI only; never persist this environment. */
+  tuiEnv(): NodeJS.ProcessEnv;
   /** Resolves when the child closes, including unexpected server failure. */
   readonly closed: Promise<void>;
   /** Idempotent; closes the ownership pipe, then terminates a stuck child. */
@@ -103,7 +105,9 @@ export async function startOpenCodeV2Server(options: StartOpenCodeV2ServerOption
       throw new Error('OpenCode 2 server identity does not match the launched process.');
     }
     if (done || controller.signal.aborted) throw new Error('OpenCode 2 exited before launch readiness.');
-    return { url, pid: child.pid, version: options.installation.version, headers: () => ({ Authorization: authorization }), closed, close };
+    return { url, pid: child.pid, version: options.installation.version,
+      headers: () => ({ Authorization: authorization }),
+      tuiEnv: () => ({ OPENCODE_PASSWORD: password, OPENCODE_SERVER_PASSWORD: password }), closed, close };
   } catch (error) {
     await close();
     if (error instanceof Error && 'code' in error && error.code === 'OPENCODE_EXECUTABLE_CHANGED') throw error;

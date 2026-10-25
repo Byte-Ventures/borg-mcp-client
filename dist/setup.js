@@ -12,6 +12,8 @@
 import prompts from 'prompts';
 import chalk from 'chalk';
 import which from 'which';
+import { inspectOpenCodeInstallation } from './opencode-installation.js';
+import { registerCommonOpenCodeMcp } from './opencode-common-config.js';
 import { confirmConfigMutation, configMutationTargets, formatConfigMutationDisclosure, parseYesFlag, setupMutationPending, } from './setup-confirm.js';
 import { addUserPromptSubmitHook, addCodexSessionStartHook, addCodexUserPromptSubmitHook, isMcpServerConfigured, isCodexMcpServerConfigured, isOpenCodeMcpServerConfigured, isSessionStartHookRegistered, isUserPromptSubmitHookRegistered, isCodexSessionStartHookRegistered, isCodexUserPromptSubmitHookRegistered, removeSessionStartHook, } from './config-utils.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
@@ -129,6 +131,7 @@ async function main() {
     const claudeSelected = selected.has('claude');
     const codexSelected = selected.has('codex');
     const opencodeSelected = selected.has('opencode');
+    const openCodeV2 = opencodeSelected && inspectOpenCodeInstallation().major === 2;
     const claudeHookPending = claudeSelected && (claudeLegacyHookPending || claudeUpsHookPending);
     const codexHookPending = codexSelected && (codexSessionHookPending || codexUpsHookPending);
     if (setupMutationPending({
@@ -202,7 +205,10 @@ async function main() {
     }
     if (opencodeSelected) {
         try {
-            ensureCliMcpConfigured('opencode');
+            if (openCodeV2)
+                registerCommonOpenCodeMcp();
+            else
+                ensureCliMcpConfigured('opencode');
             console.log(chalk.green('◼ borg configured for OpenCode'));
         }
         catch (error) {
@@ -217,7 +223,7 @@ async function main() {
     });
     for (const warning of await setupApprovalWarnings(approvalIo, {
         codex: codexSelected,
-        opencode: opencodeSelected,
+        opencode: opencodeSelected && !openCodeV2,
     })) {
         console.log(chalk.yellow(`warning: ${warning}`));
     }

@@ -498,6 +498,11 @@ export async function launchAssimilatedAgent(input, deps) {
         launchArgs = plan.args;
     }
     else if (cli === 'opencode') {
+        if (deps.launchOpenCode) {
+            return deps.launchOpenCode({ cwd: agentCwd, env: childEnv, prompt: kickoff,
+                seat: { worktree: seatWorktree, cubeId: result.cube_id, droneId: result.drone_id },
+                skipApprovalOverride: flags.noBorgApprovalOverride });
+        }
         dronePort = await allocateOpenCodePort();
         childEnv.BORG_OPENCODE_PORT = String(dronePort);
         installBorgPlugin();
@@ -584,7 +589,7 @@ export async function resolveAssimilationCubeRole(input, deps) {
     const effectiveModel = flags.model ?? null;
     const cli = await deps.resolveCli(flags.cli);
     try {
-        ensureCliMcpConfigured(cli);
+        (deps.ensureMcpConfigured ?? ensureCliMcpConfigured)(cli);
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);

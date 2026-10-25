@@ -92,7 +92,9 @@ export async function startOpenCodeV2Server(options) {
         }
         if (done || controller.signal.aborted)
             throw new Error('OpenCode 2 exited before launch readiness.');
-        return { url, pid: child.pid, version: options.installation.version, headers: () => ({ Authorization: authorization }), closed, close };
+        return { url, pid: child.pid, version: options.installation.version,
+            headers: () => ({ Authorization: authorization }),
+            tuiEnv: () => ({ OPENCODE_PASSWORD: password, OPENCODE_SERVER_PASSWORD: password }), closed, close };
     }
     catch (error) {
         await close();

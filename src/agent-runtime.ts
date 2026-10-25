@@ -55,6 +55,8 @@ export function withAgentRuntimeEnv(
   delete next[BORG_CODEX_REMOTE_WAKE_ENV];
   delete next[BORG_OPENCODE_ENV];
   delete next[BORG_CLAUDE_LAUNCH_CORRELATION_ENV];
+  delete next.BORG_OPENCODE_V2_DESCRIPTOR;
+  delete next.BORG_OPENCODE_PLUGIN_MODE;
   next[BORG_AGENT_KIND_ENV] = agentKind;
   if (agentKind === 'claude') {
     next[BORG_CLAUDE_LAUNCH_CORRELATION_ENV] = randomBytes(32).toString('base64url');

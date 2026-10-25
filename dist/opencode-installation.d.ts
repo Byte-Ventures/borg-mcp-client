@@ -23,6 +23,10 @@ export interface InspectOpenCodeDeps {
     resolveExecutable(env: NodeJS.ProcessEnv): string;
     readVersion(executable: string, env: NodeJS.ProcessEnv): string;
 }
+/** npm's Windows command shims are not executable with shell:false. Resolve
+ * only the known OpenCode package target, never evaluate shell script text. */
+export declare function resolveOpenCodeExecutablePath(candidate: string, platform?: NodeJS.Platform): string;
+export declare function verifyOpenCodeExecutableStillMatches(installation: OpenCodeInstallation, env?: NodeJS.ProcessEnv): void;
 /** No global cache: an upgrade or PATH change is observed on the next launch. */
 export declare function inspectOpenCodeInstallation(env?: NodeJS.ProcessEnv, deps?: InspectOpenCodeDeps): OpenCodeInstallation;
 export declare function verifyOpenCodeServerVersion(installation: OpenCodeInstallation, version: unknown): void;

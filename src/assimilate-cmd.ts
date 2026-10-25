@@ -213,6 +213,10 @@ export interface AssimilateDeps {
   mkdirp: (dir: string) => void;
   preparePrivateRoot: () => Promise<void>;
   exec: (cmd: string, args: string[], cwd: string, env?: Record<string, string>) => Promise<number>;
+  /** Production launch boundary; tests may keep the legacy exec seam. */
+  launchOpenCode?: (options: { cwd: string; env: NodeJS.ProcessEnv; prompt: string;
+    seat: { worktree: string; cubeId: string; droneId: string }; skipApprovalOverride?: boolean }) => Promise<number>;
+  ensureMcpConfigured?: (cli: BorgCli) => void;
 
   stderr: (line: string) => void;
   stdout: (line: string) => void;
@@ -941,6 +945,7 @@ export async function finalizeAssimilationSeat(
 export type LaunchDeps = Pick<
   AssimilateDeps,
   | 'exec'
+  | 'launchOpenCode'
   | 'getInboxPath'
   | 'isTTY'
   | 'prepareCodexRemoteLaunch'
@@ -1065,6 +1070,11 @@ export async function launchAssimilatedAgent(
     }
     launchArgs = plan.args;
   } else if (cli === 'opencode') {
+    if (deps.launchOpenCode) {
+      return deps.launchOpenCode({ cwd: agentCwd, env: childEnv, prompt: kickoff,
+        seat: { worktree: seatWorktree, cubeId: result.cube_id, droneId: result.drone_id },
+        skipApprovalOverride: flags.noBorgApprovalOverride });
+    }
     dronePort = await allocateOpenCodePort();
     childEnv.BORG_OPENCODE_PORT = String(dronePort);
     installBorgPlugin();
@@ -1115,7 +1125,7 @@ export async function launchAssimilatedAgent(
 
 export type CubeRoleResolutionDeps = Pick<
   AssimilateDeps,
-  'resolveCli' | 'stderr'
+  'resolveCli' | 'stderr' | 'ensureMcpConfigured'
 >;
 
 export interface CubeRoleResolutionInput {
@@ -1181,7 +1191,7 @@ export async function resolveAssimilationCubeRole(
   const effectiveModel: string | null = flags.model ?? null;
   const cli = await deps.resolveCli(flags.cli);
   try {
-    ensureCliMcpConfigured(cli);
+    (deps.ensureMcpConfigured ?? ensureCliMcpConfigured)(cli);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     deps.stderr(

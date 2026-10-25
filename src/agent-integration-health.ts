@@ -17,6 +17,7 @@ import {
   openCodePluginPath,
 } from './opencode-plugin.js';
 import { openCodeStartupDiagnosticLogPath } from './opencode-drone.js';
+import { hasLaunchScopedOpenCodePlugins } from './opencode-launch-plugin.js';
 
 export const AGENT_HOOK_BINS = [
   'borg-regen',
@@ -97,6 +98,8 @@ function inspectOpenCodePlugin(homeDir: string, expectedVersion: string): OpenCo
       metadata = fs.lstatSync(pluginPath);
     } catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        if (hasLaunchScopedOpenCodePlugins(homeDir)) return { path: pluginPath, configured: true,
+          status: 'ok', version: expectedVersion, detail: 'launch-scoped V1/V2 entrypoints' };
         if (!isCanonicalPath(pluginPath)) {
           return {
             path: pluginPath,
@@ -222,7 +225,9 @@ function renderOpenCodePlugin(
 ): string {
   const prefix = 'OpenCode borg-orient.js plugin:';
   switch (plugin.status) {
-    case 'ok': return `${prefix} ok (${plugin.version})`;
+    case 'ok': return plugin.detail === 'launch-scoped V1/V2 entrypoints'
+      ? `OpenCode plugins: generated for V1 or V2 on each Borg launch (${plugin.version})`
+      : `${prefix} ok (${plugin.version})`;
     case 'present': return `${prefix} present`;
     case 'absent': return `${prefix} absent`;
     case 'missing': return `${prefix} missing at ${plugin.path}`;
@@ -357,7 +362,7 @@ export function refreshAndVerifyManagedAgentIntegrations(): void {
       'Repair the named managed hook config, then rerun borg update --yes',
     );
   }
-  if (isOpenCodeMcpServerConfigured()) installBorgPlugin();
+  if (isOpenCodeMcpServerConfigured() && !hasLaunchScopedOpenCodePlugins()) installBorgPlugin();
   try {
     assertAgentIntegrationHealthy(inspectAgentIntegrationHealth());
   } catch (error) {

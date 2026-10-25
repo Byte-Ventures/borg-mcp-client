@@ -87,7 +87,7 @@ function readJsonFile(p: string): any {
   return JSON.parse(text);
 }
 
-function parseJsonc(text: string): unknown {
+export function parseJsonc(text: string): unknown {
   let stripped = '';
   let inString = false;
   let escaped = false;
@@ -1425,7 +1425,8 @@ export function isOpenCodeMcpServerConfigured(
   configPath: string = path.join(borgHomeRoot(), '.config', 'opencode', 'opencode.json')
 ): boolean {
   try {
-    const borgServer = (readOpenCodeGlobalConfig(configPath) as any).mcp?.borg;
+    const config = readOpenCodeGlobalConfig(configPath) as any;
+    const borgServer = config.mcp?.servers?.borg ?? config.mcp?.borg;
     if (!borgServer || typeof borgServer !== 'object') return false;
     return borgServer.type === 'local';
   } catch {

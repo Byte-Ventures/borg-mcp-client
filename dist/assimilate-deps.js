@@ -38,6 +38,12 @@ import { ensurePrivateBorgConfigRoot } from './private-root.js';
 import { getOrCreateRepositoryIdentity, getRepositoryAssociation, resolveGitRepositoryContext, saveRepositoryAssociation, } from './repository-identity.js';
 import { PromptInterruptedError } from './repository-cube-init.js';
 import { borgHomeRoot } from './private-root.js';
+import { inspectOpenCodeInstallation } from './opencode-installation.js';
+import { launchOpenCodeV2Process } from './opencode-v2-launch.js';
+import { launchOpenCodeProcess } from './claude.js';
+import { allocateOpenCodePort, createOpenCodeLaunchKickoff } from './opencode-drone.js';
+import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
+import { registerCommonOpenCodeMcp } from './opencode-common-config.js';
 async function defaultPromptQuestion(message) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
@@ -79,6 +85,29 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
         homedir: () => borgHomeRoot(),
         mkdirp: (dir) => mkdirSync(dir, { recursive: true }),
         preparePrivateRoot: () => ensurePrivateBorgConfigRoot(),
+        ensureMcpConfigured: (cli) => {
+            if (cli === 'opencode' && inspectOpenCodeInstallation().major === 2)
+                registerCommonOpenCodeMcp();
+            else
+                ensureCliMcpConfigured(cli);
+        },
+        launchOpenCode: async (options) => {
+            const installation = inspectOpenCodeInstallation(options.env);
+            const launch = installation.major === 2
+                ? await launchOpenCodeV2Process({ ...options, installation })
+                : await launchOpenCodeProcess({ cwd: options.cwd, env: options.env, prompt: options.prompt,
+                    port: await allocateOpenCodePort(), passthroughArgs: [], installation,
+                    droneLabel: (await cubesGetActive())?.droneLabel ?? 'opencode', cubeName: (await cubesGetActive())?.name ?? 'borg',
+                    kickoff: createOpenCodeLaunchKickoff(options.prompt) });
+            return new Promise((resolve, reject) => {
+                launch.process.once('error', reject);
+                launch.process.once('exit', async (code) => {
+                    if ('cleanup' in launch)
+                        await launch.cleanup();
+                    resolve(code ?? 0);
+                });
+            });
+        },
         exec: (cmd, args, cwd, env) => new Promise((resolveExit, rejectExit) => {
             // assimilate-cmd builds the complete child env before calling exec. Use
             // it directly so caller-selected runtime values are not overwritten.
@@ -104,7 +133,8 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
         },
         isTTY: () => process.stdin.isTTY === true,
         ensureLocalServerInstalled: async (connectCommand) => (await offerFirstRunServerInstall(buildDefaultFirstRunServerInstallDeps(), connectCommand)).kind,
-        resolveCliApprovals: (cli, cwd, options) => resolveLaunchBorgApprovals(cli, defaultApprovalIo(async (message) => {
+        resolveCliApprovals: (cli, cwd, options) => cli === 'opencode' && inspectOpenCodeInstallation().major === 2
+            ? Promise.resolve({ codexArgs: [] }) : resolveLaunchBorgApprovals(cli, defaultApprovalIo(async (message) => {
             const rl = createInterface({ input: process.stdin, output: process.stdout });
             try {
                 return await rl.question(message);
@@ -171,7 +201,11 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
         installProjectSessionHook: (projectRoot) => {
             addProjectSessionStartHook(projectRoot);
         },
-        provisionLaunchAccess,
+        provisionLaunchAccess: (cli, projectRoot, paths) => {
+            if (cli === 'opencode' && inspectOpenCodeInstallation().major === 2)
+                return;
+            provisionLaunchAccess(cli, projectRoot, paths);
+        },
         // #1015: discovery is advisory but still verifies the server-owned CA.
         detectLocalServer: async () => (await probeLocalBorgServer(DEFAULT_LOCAL_SERVER_ORIGIN))
             ? DEFAULT_LOCAL_SERVER_ORIGIN

@@ -6,6 +6,8 @@ export interface OpenCodeV2Server {
     readonly version: string;
     /** In-memory only. Never put these headers in a binding or diagnostic. */
     headers(): Record<string, string>;
+    /** Authentication for the attached TUI only; never persist this environment. */
+    tuiEnv(): NodeJS.ProcessEnv;
     /** Resolves when the child closes, including unexpected server failure. */
     readonly closed: Promise<void>;
     /** Idempotent; closes the ownership pipe, then terminates a stuck child. */

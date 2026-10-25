@@ -45,9 +45,9 @@ describe('gh#853 — main-worktree launch-menu gate', () => {
     const clearActive = source.indexOf('active = null', notice);
     const menu = source.indexOf('const action = await runBareLaunchMenu', terminalGuard);
     const currentDroneInput = source.indexOf('currentDrone:', gate);
-    const configure = source.indexOf('ensureResolvedCliConfigured(selectedCli, active)', menu);
+    const configure = source.indexOf('ensureResolvedCliConfigured(selectedCli, active', menu);
     const launchAccess = source.indexOf('provisionLaunchAccess(selectedCli', configure);
-    const spawn = source.indexOf(': spawn(cli, launchArgs', configure);
+    const spawn = source.indexOf('spawn(cli', configure);
 
     expect(probe).toBeGreaterThan(0);
     expect(source.indexOf("launchAllDeps.runSync('git'", probe)).toBeGreaterThan(probe);

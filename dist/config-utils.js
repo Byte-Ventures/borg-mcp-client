@@ -68,7 +68,7 @@ function readJsonFile(p) {
         return {};
     return JSON.parse(text);
 }
-function parseJsonc(text) {
+export function parseJsonc(text) {
     let stripped = '';
     let inString = false;
     let escaped = false;
@@ -1340,7 +1340,8 @@ export function isCodexUserPromptSubmitHookRegistered(hooksPath = CODEX_HOOKS_PA
  */
 export function isOpenCodeMcpServerConfigured(configPath = path.join(borgHomeRoot(), '.config', 'opencode', 'opencode.json')) {
     try {
-        const borgServer = readOpenCodeGlobalConfig(configPath).mcp?.borg;
+        const config = readOpenCodeGlobalConfig(configPath);
+        const borgServer = config.mcp?.servers?.borg ?? config.mcp?.borg;
         if (!borgServer || typeof borgServer !== 'object')
             return false;
         return borgServer.type === 'local';

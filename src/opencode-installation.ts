@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { realpathSync, readFileSync, existsSync } from 'node:fs';
+import path from 'node:path';
 import which from 'which';
 
 export type OpenCodeGeneration = 1 | 2;
@@ -52,7 +53,7 @@ export interface InspectOpenCodeDeps {
 }
 
 const defaultDeps: InspectOpenCodeDeps = {
-  resolveExecutable: (env) => realpathSync(which.sync('opencode', { path: env.PATH })),
+  resolveExecutable: (env) => resolveOpenCodeExecutablePath(which.sync('opencode', { path: env.PATH })),
   readVersion: (executable, env) => execFileSync(executable, ['--version'], {
     env,
     encoding: 'utf8',
@@ -62,6 +63,28 @@ const defaultDeps: InspectOpenCodeDeps = {
     windowsHide: true,
   }),
 };
+
+/** npm's Windows command shims are not executable with shell:false. Resolve
+ * only the known OpenCode package target, never evaluate shell script text. */
+export function resolveOpenCodeExecutablePath(candidate: string, platform = process.platform): string {
+  const resolved = realpathSync(candidate);
+  if (platform !== 'win32' || !/\.cmd$/i.test(resolved)) return resolved;
+  const shim = readFileSync(resolved, 'utf8');
+  const native = /%dp0%[\\/]([^"\r\n]*?@opencode[\\/]cli[\\/]bin[\\/]opencode\.exe)/i.exec(shim)?.[1];
+  if (native) return realpathSync(path.resolve(path.dirname(resolved), ...native.split(/[\\/]/)));
+  if (/opencode-ai[\\/]bin[\\/]opencode/.test(shim)) {
+    for (const modules of [path.join(path.dirname(resolved), 'node_modules'), path.dirname(path.dirname(resolved))]) {
+      const executable = path.join(modules, `opencode-windows-${process.arch}`, 'bin', 'opencode.exe');
+      if (existsSync(executable)) return realpathSync(executable);
+    }
+  }
+  throw new OpenCodeInstallationError('Could not resolve the installed native OpenCode executable from its Windows shim.');
+}
+
+export function verifyOpenCodeExecutableStillMatches(installation: OpenCodeInstallation, env = process.env): void {
+  const current = inspectOpenCodeInstallation(env, { ...defaultDeps, resolveExecutable: () => installation.executable });
+  verifyOpenCodeServerVersion(installation, current.version);
+}
 
 /** No global cache: an upgrade or PATH change is observed on the next launch. */
 export function inspectOpenCodeInstallation(

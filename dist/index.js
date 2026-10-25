@@ -10,6 +10,8 @@
  *    collaborating sessions.
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { OPENCODE_V2_DESCRIPTOR_ENV } from './opencode-v2-broker.js';
+import { connectOpenCodeV2Runtime, injectOpenCodeV2Entry, settleOpenCodeV2Entry, notifyOpenCodeV2LogPersisted } from './opencode-v2-runtime.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { assertRoleMatches } from './role-match.js';
@@ -132,6 +134,11 @@ export function formatPatchedRoleSectionResult(action, heading, role, advisory) 
     return appendServerAdvisory(`${verb} section **${heading}** in role **${role.name}** (id: ${role.id}).`, advisory);
 }
 export async function connectOpenCodeRuntime(active, env = process.env, deps = {}) {
+    if (env[OPENCODE_V2_DESCRIPTOR_ENV]) {
+        if (!active.cubeId || !active.droneId)
+            return false;
+        return connectOpenCodeV2Runtime({ worktree: active.worktree ?? findProjectRoot(), cubeId: active.cubeId, droneId: active.droneId }, env);
+    }
     const configuredPort = configuredOpenCodePort(env);
     if (configuredPort === null) {
         console.error(OPEN_CODE_PORT_MISSING_DIAGNOSTIC);
@@ -197,11 +204,15 @@ export async function main() {
         // injectOpenCode hook routes SSE entries into the TUI's session.
         // Best-effort; never breaks the MCP server.
         openCode: async () => {
-            installBorgPlugin();
+            if (!process.env[OPENCODE_V2_DESCRIPTOR_ENV] && process.env.BORG_OPENCODE_PLUGIN_MODE !== 'launch')
+                installBorgPlugin();
             const active = await getActiveCube();
             if (active && openCodeRuntime) {
                 if (await connectOpenCodeRuntime(active)) {
-                    setModuleInjectOpenCode(injectOpenCodeEntry, settleOpenCodeEntry);
+                    if (process.env[OPENCODE_V2_DESCRIPTOR_ENV])
+                        setModuleInjectOpenCode(injectOpenCodeV2Entry, settleOpenCodeV2Entry);
+                    else
+                        setModuleInjectOpenCode(injectOpenCodeEntry, settleOpenCodeEntry);
                 }
             }
         },
@@ -906,6 +917,7 @@ export async function main() {
                         serverTrustIdentity: active.serverTrustIdentity,
                     };
                     const result = await appendLog(active.sessionToken, active.apiUrl, finalMessage, appendOpts);
+                    await notifyOpenCodeV2LogPersisted(request.params._meta?.['ai.opencode/sessionID']);
                     await recordLifecycleLog(active, finalMessage, agentSession);
                     if (lifecycleSignal === 'arrival')
                         markArrivalAnnouncedThisProcess();

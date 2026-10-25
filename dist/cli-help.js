@@ -168,7 +168,9 @@ export function doctorHelpText(version) {
     return (`borg doctor (borgmcp ${version}) — inspect Borg agent integrations without changing them\n\n` +
         `Usage:\n` +
         `  borg doctor          Run read-only checks for hook commands, OpenCode integration, and startup diagnostics\n` +
-        `  borg doctor --help   Show this help\n`);
+        `  borg doctor --help   Show this help\n`
+        + `\nOpenCode 1 and 2.1.2+ are supported. Each launch checks the installed executable.\n`
+        + `V2 keeps Code Mode and uses a private server per drone. Details: docs/OPENCODE.md\n`);
 }
 export function clientSubcommandHelpText(command, args, version) {
     if (!args.some(isHelpFlag))

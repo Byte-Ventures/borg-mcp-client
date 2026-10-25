@@ -8,6 +8,8 @@ import { ensurePrivateBorgConfigRoot } from './private-root.js';
 import { CodexAppServerClient } from './codex-app-server.js';
 import { codexAppServerSocketFromEnv, isCodexSubagentSource } from './codex-wake-resolve.js';
 import { resolveOpenCodeAgentSessionId } from './opencode-drone.js';
+import { resolveOpenCodeV2SessionID } from './opencode-v2-runtime.js';
+import { OPENCODE_V2_DESCRIPTOR_ENV } from './opencode-v2-broker.js';
 
 export type AgentSessionIdentity =
   | { kind: 'known'; id: string; source: string; observedAt: string }
@@ -87,7 +89,7 @@ export async function resolveAgentSessionIdentity(
       } finally { client.close(); }
     }
     if (kind === 'opencode') {
-      const id = await resolveOpenCodeAgentSessionId();
+      const id = process.env[OPENCODE_V2_DESCRIPTOR_ENV] ? await resolveOpenCodeV2SessionID() : await resolveOpenCodeAgentSessionId();
       return validId(id)
         ? { kind: 'known', id: `opencode:${id}`, source: 'opencode-launch-binding', observedAt: new Date().toISOString() }
         : { kind: 'unknown', reason: 'opencode-launch-binding-unavailable-or-changed' };
