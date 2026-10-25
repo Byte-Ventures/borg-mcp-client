@@ -146,8 +146,17 @@ export async function launchOpenCodeV2Process(options: {
       // The published native host lazily loads plugins on prompt admission,
       // not on metadata/registry reads. Queue an inert, non-resuming probe and
       // cancel it before attaching the TUI or admitting the real kickoff.
-      const probe = await broker.call('/wake', { text: 'Borg runtime readiness probe', key: 'readiness',
-        source: 'readiness', allowSubmit: true, resume: false });
+      const probeInput = { text: 'Borg runtime readiness probe', key: 'readiness', source: 'readiness', resume: false };
+      let probe = await broker.call('/wake', { ...probeInput, allowSubmit: true });
+      // Plugin activation can outlive prompt admission or its HTTP timeout.
+      // Reconcile the same inert intent and wait for the separate hook signal.
+      const pluginDeadline = Date.now() + 30_000;
+      while (Date.now() < pluginDeadline) {
+        const ready = (await broker.call('/status')).pluginReady;
+        if (!probe.accepted) probe = await broker.call('/wake', { ...probeInput, allowSubmit: false });
+        if (ready && probe.accepted) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
       if (!probe.accepted) throw new OpenCodeV2LaunchError('OpenCode 2 runtime readiness could not be confirmed.');
       await transport.client.session.inbox.cancel({ sessionID, inboxID: probe.id });
       await broker.call('/settle', { source: 'readiness' });

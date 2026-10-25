@@ -17,6 +17,8 @@ const providerSteps = [];
 // Only paths/status/timing: never print authorization, request bodies, or API responses.
 const nativeRequests = [];
 let nativePlugins;
+let nativeOrigin;
+let nativeHeaders;
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const pathname = new URL(typeof input === 'string' || input instanceof URL ? input : input.url).pathname;
@@ -24,10 +26,14 @@ globalThis.fetch = async (input, init) => {
   try {
     const response = await originalFetch(input, init);
     nativeRequests.push({ pathname, status: response.status, milliseconds: Date.now() - started });
-    if (!realSeat && process.platform === 'win32' && (pathname === '/api/session' || pathname.endsWith('/prompt'))) {
+    if (pathname === '/api/info' && response.ok) {
+      nativeOrigin = new URL(typeof input === 'string' || input instanceof URL ? input : input.url).origin;
+      nativeHeaders = init?.headers;
+    }
+    if (!realSeat && process.platform === 'win32' && nativeOrigin && (pathname === '/api/session' || pathname.endsWith('/prompt') || pathname === '/status')) {
       try {
-        const state = await originalFetch(new URL('/api/plugin', typeof input === 'string' || input instanceof URL ? input : input.url),
-          { headers: init?.headers, signal: AbortSignal.timeout(5_000) });
+        const state = await originalFetch(new URL('/api/plugin', nativeOrigin),
+          { headers: nativeHeaders, signal: AbortSignal.timeout(5_000) });
         const plugins = await state.json();
         nativePlugins = JSON.stringify(plugins.data?.filter(plugin => plugin.source?.type !== 'builtin' || plugin.state?.status !== 'active'))
           .replace(/[A-Za-z0-9_-]{43,}/g, '[redacted]').slice(0, 6000);
@@ -158,12 +164,14 @@ try {
     assert.ok((await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('3+ state-changing'), 'Nested shell operations counted once each');
     await callOpenCodeV2Broker(descriptor, '/logged', { sessionID: descriptor.sessionID });
   } else {
-    assert.ok((await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('3+ state-changing'),
-      'Real Borg reads and nested shell operations completed before the audit follow-up');
-    // Native context hooks run at generation boundaries. The next prompt
-    // exposes the newly accumulated audit nudge to the provider.
-    await callOpenCodeV2Broker(descriptor, '/wake', { key: 'audit-followup', text: 'Local audit follow-up', source: 'audit-followup' });
-    await nativeClient.session.wait({ sessionID: descriptor.sessionID });
+    if (!logged) {
+      assert.ok((await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('3+ state-changing'),
+        'Real Borg reads and nested shell operations completed before the audit follow-up');
+      // A follow-up prompt also covers hosts that refresh context only at
+      // the next generation boundary.
+      await callOpenCodeV2Broker(descriptor, '/wake', { key: 'audit-followup', text: 'Local audit follow-up', source: 'audit-followup' });
+      await nativeClient.session.wait({ sessionID: descriptor.sessionID });
+    }
     assert.ok(logged, 'Actual Borg MCP persisted a log after the native nested audit nudge');
   }
   assert.ok(!(await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('Heads up:'));
