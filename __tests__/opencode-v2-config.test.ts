@@ -141,3 +141,75 @@ it.each(['seat?', 'seat*'])('declines literal wildcard directory %s without gran
     expect(effectiveOpenCodeV2Permission(rules, 'external_directory', join(root, 'seatX/file'))).toBe('ask');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+it.each([false, true])('keeps unrelated directory approval ordering with skipOverride=%s', async skip => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-oc-ordered-')));
+  try {
+    const prefix = root.replace(/\\/g, '/');
+    const rules = [
+      { action: 'external_directory', resource: `${prefix}/sensitive/*`, effect: 'allow' as const },
+      { action: 'external_directory', resource: '*', effect: 'ask' as const },
+      { action: 'external_directory', resource: `${prefix}/public/*`, effect: 'allow' as const },
+    ];
+    let permissions: any[] = [{ action: 'shell', resource: '*', effect: 'deny' }];
+    const update = vi.fn(async input => { permissions = input.permissions; });
+    const client: any = { session: { get: async () => ({ permissions }), update }, config: { get: async () => [] },
+      agent: { get: async () => ({ data: { permissions: rules } }) } };
+    const outside = [`${prefix}/sensitive/file`, `${prefix}/public/file`, `${prefix}/other/file`];
+    const before = outside.map(path => effectiveOpenCodeV2Permission([...rules, ...permissions], 'external_directory', path));
+    for (const scratch of ['scratch1', 'scratch2', 'scratch3']) {
+      await applyOpenCodeV2LaunchPermissions(client, 'ses_a', root, skip, [join(root, scratch)]);
+      expect(outside.map(path => effectiveOpenCodeV2Permission([...rules, ...permissions], 'external_directory', path))).toEqual(before);
+      expect(effectiveOpenCodeV2Permission([...rules, ...permissions], 'external_directory', `${prefix}/${scratch}/file`)).toBe('allow');
+      expect(effectiveOpenCodeV2Permission([...rules, ...permissions], 'shell')).toBe('deny');
+    }
+    expect(permissions.filter(rule => rule.action === 'external_directory')).toHaveLength(3);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('preserves global and scoped rules from session permissions when adding directory access', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-oc-session-policy-')));
+  try {
+    const prefix = root.replace(/\\/g, '/');
+    const rules = [{ action: 'external_directory', resource: '*', effect: 'ask' as const }];
+    const existing = [
+      { action: 'external_directory', resource: `${prefix}/sensitive/*`, effect: 'allow' as const },
+      { action: '*', resource: '*', effect: 'ask' as const },
+      { action: 'external_directory', resource: `${prefix}/blocked/*`, effect: 'deny' as const },
+    ];
+    const update = vi.fn(async () => {});
+    const client: any = { session: { get: async () => ({ permissions: existing }), update }, config: { get: async () => [] },
+      agent: { get: async () => ({ data: { permissions: rules } }) } };
+    await applyOpenCodeV2LaunchPermissions(client, 'ses_a', root, true, [join(root, 'scratch')]);
+    const after = [...rules, ...update.mock.calls[0][0].permissions];
+    expect(effectiveOpenCodeV2Permission(after, 'external_directory', `${prefix}/sensitive/file`)).toBe('ask');
+    expect(effectiveOpenCodeV2Permission(after, 'external_directory', `${prefix}/blocked/file`)).toBe('deny');
+    expect(effectiveOpenCodeV2Permission(after, 'external_directory', `${prefix}/scratch/file`)).toBe('allow');
+    expect(effectiveOpenCodeV2Permission(after, 'shell')).toBe('ask');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('limits replayed wildcard rules to each grant and keeps later agent changes effective elsewhere', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-oc-scoped-policy-')));
+  try {
+    const prefix = root.replace(/\\/g, '/');
+    let rules = [
+      { action: 'external_directory', resource: `${prefix}/sensitive/*`, effect: 'allow' as const },
+      { action: 'external_directory', resource: '*', effect: 'ask' as const },
+      { action: 'external_directory', resource: '*/private?/*', effect: 'deny' as const },
+      { action: 'external_directory', resource: '*/private?/public/*', effect: 'allow' as const },
+    ];
+    let permissions: any[] = [];
+    const client: any = { session: { get: async () => ({ permissions }), update: async input => { permissions = input.permissions; } },
+      config: { get: async () => [] }, agent: { get: async () => ({ data: { permissions: rules } }) } };
+    await applyOpenCodeV2LaunchPermissions(client, 'ses_a', root, true, [join(root, 'scratch')]);
+    for (const path of [`${prefix}/sensitive/file`, `${prefix}/other/file`, `${prefix}/private1/file`, `${prefix}/private1/public/file`]) {
+      expect(effectiveOpenCodeV2Permission([...rules, ...permissions], 'external_directory', path)).toBe(effectiveOpenCodeV2Permission(rules, 'external_directory', path));
+    }
+    expect(effectiveOpenCodeV2Permission([...rules, ...permissions], 'external_directory', `${prefix}/scratch/file`)).toBe('allow');
+    expect(effectiveOpenCodeV2Permission([...rules, ...permissions], 'external_directory', `${prefix}/scratch/private1/file`)).toBe('deny');
+    expect(effectiveOpenCodeV2Permission([...rules, ...permissions], 'external_directory', `${prefix}/scratch/private1/public/file`)).toBe('allow');
+    rules = [{ action: 'external_directory', resource: '*', effect: 'deny' } as any];
+    expect(effectiveOpenCodeV2Permission([...rules, ...permissions], 'external_directory', `${prefix}/sensitive/file`)).toBe('deny');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

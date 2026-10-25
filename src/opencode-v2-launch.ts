@@ -26,10 +26,14 @@ export function preserveOpenCodeV2McpOptions(sources: readonly ConfigEntry[], ow
     if (source.type !== 'document') continue;
     const mcp: any = source.info.mcp;
     let entry = mcp?.servers?.borg ?? mcp?.borg;
-    // The launcher overlays a complete entry in the inline source. Restore
-    // the user's original inline entry at that exact precedence position.
+    // The owned inline entry carries the user's options through native parsing.
+    // Use its normalized values (including environment/file substitutions), but
+    // let it win only if the user actually supplied an inline Borg entry.
     if (ownedDescriptor && entry?.environment?.[OPENCODE_V2_DESCRIPTOR_ENV] === ownedDescriptor) {
-      entry = inline.mcp?.servers?.borg ?? inline.mcp?.borg;
+      if ((inline.mcp?.servers?.borg ?? inline.mcp?.borg) === undefined) continue;
+      const environment = { ...entry.environment };
+      for (const key of ['BORG_SESSION', 'BORG_AGENT_KIND', 'BORG_OPENCODE', OPENCODE_V2_DESCRIPTOR_ENV]) delete environment[key];
+      entry = { ...entry, environment };
     }
     if (entry !== undefined) winner = entry;
   }
@@ -72,9 +76,11 @@ export function openCodeV2LaunchOverlay(env: NodeJS.ProcessEnv, descriptorPath: 
   if (!content || typeof content !== 'object' || Array.isArray(content)) throw new Error('Invalid OPENCODE_CONFIG_CONTENT');
   const existing = content.mcp?.servers?.borg ?? content.mcp?.borg ?? {};
   const environment: Record<string, string> = {
+    ...existing.environment,
     BORG_SESSION: '1', BORG_AGENT_KIND: 'opencode', BORG_OPENCODE: '1',
     [OPENCODE_V2_DESCRIPTOR_ENV]: descriptorPath,
   };
+  delete environment.OPENCODE_PASSWORD; delete environment.OPENCODE_SERVER_PASSWORD;
   for (const key of ['BORG_STATE_ROOT', 'BORG_API_URL', BORG_LAUNCH_EXPECTED_SEAT_ENV]) if (env[key]) environment[key] = env[key]!;
   return { ...borgAgentConfigEnv(env), BORG_SESSION: '1', BORG_AGENT_KIND: 'opencode', BORG_OPENCODE: '1', [OPENCODE_V2_DESCRIPTOR_ENV]: descriptorPath,
     // V2 migrations are incompatible with V1's default database. Keep the

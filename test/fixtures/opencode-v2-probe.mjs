@@ -56,6 +56,8 @@ let handoffIssued = false;
 let discoveredPaths = [];
 const direct = process.env.OPENCODE_TEST_DIRECT === '1';
 const callsPath = join(root, 'mcp-calls.jsonl');
+const environmentPath = join(root, 'mcp-environment.jsonl');
+const valuePath = join(root, 'inline-value.txt'); writeFileSync(valuePath, 'native-file-expanded');
 const plugin = join(root, 'fixture-plugin'); mkdirSync(plugin);
 writeFileSync(join(plugin, 'index.js'), `export default {id:'borg.native-fixture.tools',async setup(ctx){
   await ctx.tool.transform(editor => { editor.update('shell', tool => { tool.options = {...tool.options, codemode:true}; }); });
@@ -133,9 +135,14 @@ try {
     SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, COMSPEC: process.env.COMSPEC, PATHEXT: process.env.PATHEXT,
     USERPROFILE: root, APPDATA: join(root, 'appdata'), LOCALAPPDATA: join(root, 'localappdata'),
     XDG_CONFIG_HOME: join(root, 'xdg-config'), XDG_DATA_HOME: join(root, 'data'), XDG_CACHE_HOME: join(root, 'cache'), XDG_STATE_HOME: join(root, 'state'),
+    BORG_FIXTURE_INPUT: 'native-env-expanded',
     OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1',
     OPENCODE_CONFIG_CONTENT: JSON.stringify({ update: 'disable', snapshots: false, model: 'borg-fixture/model',
       plugins: [plugin, ...(v1Binary ? [userPlugin] : [])],
+      ...(!realSeat ? { mcp: { servers: { borg: { type: 'local', command: ['user-placeholder'], codemode: !direct, environment: {
+        BORG_FIXTURE_VALUE: '{env:BORG_FIXTURE_INPUT}', BORG_FIXTURE_FILE: `{file:${valuePath}}`,
+        OPENCODE_PASSWORD: 'must-not-reach-mcp', OPENCODE_SERVER_PASSWORD: 'must-not-reach-mcp',
+      } } } } } : {}),
       providers: { 'borg-fixture': { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: `http://127.0.0.1:${provider.address().port}/v1`, apiKey: 'fixture' },
         models: { model: { name: 'Fixture', limit: { context: 32000, output: 1024 } } } } } }) };
   const installation = inspectOpenCodeInstallation(env, { resolveExecutable: () => realpathSync(binary),
@@ -143,7 +150,7 @@ try {
   let tui;
   const subdirectory = join(directory, 'fixture-src'); mkdirSync(subdirectory, { recursive: true });
   const launchOptions = { installation, cwd: subdirectory, env, prompt: 'Local integration fixture',
-    ...(realSeat ? {} : { mcpCommand: [process.execPath, resolve('test/fixtures/opencode-mcp.mjs'), callsPath] }),
+    ...(realSeat ? {} : { mcpCommand: [process.execPath, resolve('test/fixtures/opencode-mcp.mjs'), callsPath, environmentPath] }),
     seat: { worktree: directory, droneId: process.env.OPENCODE_TEST_DRONE_ID ?? 'fixture-drone', cubeId: process.env.OPENCODE_TEST_CUBE_ID ?? 'fixture-cube' },
     spawnProcess: (executable, args, options) => {
       assert.equal(executable, realpathSync(binary)); assert.ok(args.includes('--server')); assert.ok(!args.includes('--prompt'));
@@ -180,6 +187,10 @@ try {
     status: await callOpenCodeV2Broker(descriptor, '/status') }));
   assert.ok(!readFileSync(descriptorPath, 'utf8').includes('OPENCODE_PASSWORD'));
   if (!realSeat) {
+    const environments = readFileSync(environmentPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.ok(environments.length > 0);
+    assert.ok(environments.every(value => value.value === 'native-env-expanded' && value.file === 'native-file-expanded' && value.rootPasswordPresent === false),
+      'Borg receives native-expanded inline env/file values without root API credentials');
     const calls = readFileSync(callsPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     assert.deepEqual(calls.map(call => call.name).sort(), ['borg_read-log', 'borg_roster']);
     assert.ok(calls.every(call => call.meta?.['ai.opencode/sessionID'] === descriptor.sessionID));
@@ -214,8 +225,9 @@ try {
     let otherURL;
     let otherHeaders;
     let otherVerificationKey;
+    const otherContent = JSON.parse(env.OPENCODE_CONFIG_CONTENT); delete otherContent.mcp;
     const otherSeat = { worktree: otherDirectory, droneId: 'second-fixture-drone', cubeId: 'fixture-cube' };
-    const other = await launchOpenCodeV2Process({ installation, cwd: otherDirectory, env: { ...env, OPENCODE_DISABLE_PROJECT_CONFIG: '0' },
+    const other = await launchOpenCodeV2Process({ installation, cwd: otherDirectory, env: { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify(otherContent), OPENCODE_DISABLE_PROJECT_CONFIG: '0' },
       prompt: 'Concurrent native host fixture', seat: otherSeat,
       mcpCommand: [process.execPath, resolve('test/fixtures/opencode-mcp.mjs'), join(root, 'other-mcp-calls.jsonl')],
       spawnProcess: (_executable, args, options) => {
@@ -289,6 +301,24 @@ try {
   if (!realSeat) {
     const { SessionMessage } = await import('@opencode/schema/session-message');
     const { effectiveOpenCodeV2Permission } = await import('../../dist/opencode-v2-permissions.js');
+    const { applyOpenCodeV2LaunchPermissions } = await import('../../dist/opencode-v2-permissions.js');
+    const sensitive = join(root, 'sensitive'); const scratch = join(root, 'scratch');
+    mkdirSync(sensitive); mkdirSync(scratch);
+    const sensitiveResource = sensitive.replace(/\\/g, '/') + '/*';
+    const policySession = await nativeClient.session.create({ location: { directory }, title: 'Directory approval order fixture' });
+    await nativeClient.session.update({ sessionID: policySession.id, permissions: [
+      { action: 'external_directory', resource: sensitiveResource, effect: 'allow' },
+      { action: 'external_directory', resource: '*', effect: 'ask' },
+      { action: 'external_directory', resource: '*/private?/*', effect: 'deny' },
+      { action: 'external_directory', resource: '*/private?/public/*', effect: 'allow' },
+    ] });
+    const checkPermission = resources => nativeClient.permission.create({ sessionID: policySession.id, agent: 'build', action: 'external_directory', resources });
+    assert.equal((await checkPermission([sensitiveResource])).effect, 'ask');
+    await applyOpenCodeV2LaunchPermissions(nativeClient, policySession.id, directory, true, [scratch]);
+    assert.equal((await checkPermission([sensitiveResource])).effect, 'ask', 'Adding sibling scratch access preserves native approval for the sensitive directory');
+    assert.equal((await checkPermission([scratch.replace(/\\/g, '/') + '/*'])).effect, 'allow');
+    assert.equal((await checkPermission([scratch.replace(/\\/g, '/') + '/private1/*'])).effect, 'deny');
+    assert.equal((await checkPermission([scratch.replace(/\\/g, '/') + '/private1/public/*'])).effect, 'allow');
     const human = await nativeClient.session.create({ location: { directory }, title: 'Human-selected Borg root' });
     const before = readFileSync(callsPath, 'utf8').trim().split('\n').length;
     handoffPending = true;

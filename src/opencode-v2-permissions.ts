@@ -11,6 +11,27 @@ export function effectiveOpenCodeV2Permission(rules: readonly OpenCodeV2Permissi
   return result;
 }
 
+/** Intersect a native * / ? pattern with a literal directory prefix. Each
+ * reachable glob position supplies one suffix; every result stays in prefix. */
+function scopeDirectoryPattern(pattern: string, prefix: string): string[] {
+  if (/^\*+$/.test(pattern)) return [prefix + '*'];
+  const close = (positions: Set<number>) => {
+    for (const index of positions) if (pattern[index] === '*') positions.add(index + 1);
+    return positions;
+  };
+  let positions = close(new Set([0]));
+  for (let index = 0; index < prefix.length; index++) {
+    const next = new Set<number>();
+    for (const position of positions) {
+      const token = pattern[position];
+      if (token === '*') next.add(position);
+      else if (token === '?' || (token !== undefined && matches(token, prefix[index]))) next.add(position + 1);
+    }
+    positions = close(next);
+  }
+  return [...new Set([...positions].map(position => prefix + pattern.slice(position)))];
+}
+
 /** Query only the owned server; `opencode debug config` starts a shared V2 service. */
 export async function applyOpenCodeV2LaunchPermissions(client: OpenCodeClient, sessionID: string, directory: string, skipOverride: boolean,
   accessDirectories: readonly string[] = []): Promise<string[]> {
@@ -45,15 +66,27 @@ export async function applyOpenCodeV2LaunchPermissions(client: OpenCodeClient, s
       ? `OpenCode restricts ${restrictive.length} Borg coordination tools. To allow them, append: ${JSON.stringify({ permissions: additions })}`
       : `Applied launch-only approvals for ${restrictive.length} Borg coordination tools. ${BORG_DISPATCHER_APPROVAL_DISCLOSURE}`);
   }
-  // A parent-directory grant must not erase narrower operator rules. Replay
-  // scoped directory rules in their original order, including exceptions that
-  // allow a child of a denied directory. Global defaults still allow the new
-  // grant to do its intended work.
-  const scopedDirectoryRules = access.length ? rules.filter(rule =>
-    matches(rule.action, 'external_directory') && rule.resource !== '*')
-    .map(rule => ({ ...rule, action: 'external_directory' })) : [];
+  let permissions = session.permissions ?? [];
+  if (access.length) {
+    const directoryRules = rules.filter(rule => matches(rule.action, 'external_directory'))
+      .map(rule => ({ ...rule, action: 'external_directory' }));
+    const boundary = directoryRules.reduce((last, rule, index) => rule.resource === '*' ? index : last, -1) + 1;
+    // Retain the complete rule order inside each grant. Restrict every replayed
+    // rule to that directory, so neither stale allows nor copied global defaults
+    // can affect unrelated paths, including after an operator changes policy.
+    const additions = access.flatMap(grant => {
+      const scoped = (entries: OpenCodeV2Permission[]) => entries.flatMap(rule =>
+        scopeDirectoryPattern(rule.resource, grant.resource.slice(0, -1)).map(resource => ({ ...rule, resource })));
+      return [...scoped(directoryRules.slice(0, boundary)), grant, ...scoped(directoryRules.slice(boundary))];
+    });
+    const combined = [...permissions, ...additions];
+    // An identical later directory pattern always shadows its earlier copy.
+    const last = new Map<string, number>();
+    combined.forEach((rule, index) => { if (rule.action === 'external_directory') last.set(rule.resource, index); });
+    permissions = combined.filter((rule, index) => rule.action !== 'external_directory' || last.get(rule.resource) === index);
+  }
   if (access.length || (restrictive.length && !skipOverride)) await client.session.update({ sessionID, permissions: [
-    ...(session.permissions ?? []), ...access, ...scopedDirectoryRules,
+    ...permissions,
     ...(!skipOverride ? restrictive.map(action => ({ action, resource: '*', effect: 'allow' as const })) : []),
   ] });
   return warnings;
