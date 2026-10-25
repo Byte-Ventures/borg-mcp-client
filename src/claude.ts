@@ -115,6 +115,7 @@ import { inspectOpenCodeInstallation, type OpenCodeInstallation } from './openco
 import { launchOpenCodeV2Process } from './opencode-v2-launch.js';
 import { installLaunchOpenCodePlugin, migrateLegacyOpenCodePlugin } from './opencode-launch-plugin.js';
 import { fs } from './guarded-fs.js';
+import { borgHomeRoot } from './private-root.js';
 import { parseJsonc } from './config-utils.js';
 
 export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
@@ -707,6 +708,7 @@ async function main() {
   // Codex remote-wake transport. In particular, clear a stale Codex marker
   // before a Codex -> Claude relaunch can reach its MCP child.
   let launchEnv: NodeJS.ProcessEnv = { ...withAgentRuntimeEnv(process.env, cli), BORG_SESSION: '1' };
+  if (cli === 'opencode' && active) launchEnv.BORG_LAUNCH_SCRATCH = scratchRootForSeat(borgHomeRoot(), active.droneLabel, active.droneId);
   if (cli === 'opencode' && launchApproval.openCodePermission) {
     launchEnv.OPENCODE_PERMISSION = launchApproval.openCodePermission;
   }

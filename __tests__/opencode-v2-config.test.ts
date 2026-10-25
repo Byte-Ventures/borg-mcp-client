@@ -70,3 +70,19 @@ it('keeps V2 permission ordering and never grants the outer execute tool', async
   expect((await applyOpenCodeV2LaunchPermissions(client, 'ses_a', '/worktree', true)).join('\n')).toContain('append:');
   expect(update).not.toHaveBeenCalled();
 });
+
+it('grants only declared V2 launch directories and preserves specific operator denials', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-oc-access-')));
+  try {
+    const scratch = join(root, 'scratch'); const blocked = join(root, 'blocked');
+    const resource = pathname => pathname.replace(/\\/g, '/') + '/*';
+    const update = vi.fn(async () => {});
+    const rules = [{ action: '*', resource: '*', effect: 'allow' },
+      { action: 'external_directory', resource: '*', effect: 'ask' },
+      { action: 'external_directory', resource: resource(blocked), effect: 'deny' }];
+    const client: any = { session: { get: async () => ({ agent: 'build', permissions: [] }), update },
+      config: { get: async () => [] }, agent: { get: async () => ({ data: { permissions: rules } }) } };
+    await applyOpenCodeV2LaunchPermissions(client, 'ses_a', root, true, [scratch, blocked]);
+    expect(update.mock.calls[0][0].permissions).toEqual([{ action: 'external_directory', resource: resource(scratch), effect: 'allow' }]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

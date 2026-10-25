@@ -8,6 +8,7 @@ export function openCodePrivateRoot(): string {
   // replace an operator's ACL on the shared Borg credentials directory.
   return process.platform === 'win32' ? path.join(borgConfigRoot(), 'opencode-launches') : borgConfigRoot();
 }
+const sealedWindowsRoots = new Map<string, string>();
 function windowsAcl(filename: string, initialize: boolean): void {
   const script = `
 $ErrorActionPreference = 'Stop'
@@ -35,8 +36,12 @@ export function ensureOpenCodePrivateRoot(root = openCodePrivateRoot()): void {
   if (!isCanonicalPath(root)) throw new Error('OpenCode private state path contains a symlink.');
   if (process.platform !== 'win32') { ensurePrivateBorgConfigRootSync(root); return; }
   fs.mkdirSync(root, { recursive: true });
-  if (!fs.lstatSync(root).isDirectory()) throw new Error('OpenCode private state root is not a directory.');
+  const metadata = fs.lstatSync(root);
+  if (!metadata.isDirectory()) throw new Error('OpenCode private state root is not a directory.');
+  const identity = `${metadata.dev}:${metadata.ino}`;
+  if (sealedWindowsRoots.get(root) === identity) return;
   windowsAcl(root, true);
+  sealedWindowsRoots.set(root, identity);
 }
 export function verifyOpenCodePrivateWindowsPath(filename: string): void {
   if (process.platform === 'win32') windowsAcl(filename, false);

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { delimiter, dirname, join } from 'node:path';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, copyFileSync, symlinkSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -142,6 +142,10 @@ describe.skipIf(!publishedBinary)('published OpenCode V2 private server', () => 
     const plugin = join(root, 'plugin');
     mkdirSync(config);
     mkdirSync(plugin);
+    const bin = join(root, 'bin'); mkdirSync(bin);
+    const executableAlias = join(bin, process.platform === 'win32' ? 'opencode.exe' : 'opencode');
+    if (process.platform === 'win32') copyFileSync(publishedBinary!, executableAlias);
+    else symlinkSync(realpathSync(publishedBinary!), executableAlias);
     writeFileSync(join(plugin, 'index.js'), `export default { id: 'borg.contract', async setup(ctx) {
       let calls = 0;
       await ctx.session.hook('prompt', event => {
@@ -151,7 +155,8 @@ describe.skipIf(!publishedBinary)('published OpenCode V2 private server', () => 
     } };`);
     writeFileSync(join(config, 'opencode.json'), JSON.stringify({ update: 'disable', snapshots: false, plugins: [plugin] }));
     const env = {
-      PATH: [dirname(publishedBinary!), process.env.PATH].filter(Boolean).join(delimiter),
+      PATH: [bin, process.env.PATH].filter(Boolean).join(delimiter),
+      SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
       TMPDIR: process.env.TMPDIR,
       XDG_DATA_HOME: join(root, 'data'),
       XDG_CONFIG_HOME: join(root, 'xdg-config'),
@@ -166,7 +171,9 @@ describe.skipIf(!publishedBinary)('published OpenCode V2 private server', () => 
     let server: Awaited<ReturnType<typeof startOpenCodeV2Server>> | undefined;
     try {
       const installed = inspectOpenCodeInstallation(env);
-      expect(installed.executable).toBe(realpathSync(publishedBinary!));
+      const expected = realpathSync(executableAlias);
+      expect(process.platform === 'win32' ? installed.executable.toLowerCase() : installed.executable)
+        .toBe(process.platform === 'win32' ? expected.toLowerCase() : expected);
       server = await startOpenCodeV2Server({ installation: installed, directory: root, env });
       expect((await fetch(`${server.url}/api/info`)).status).toBe(401);
       const request = async (route: string, body?: unknown) => {

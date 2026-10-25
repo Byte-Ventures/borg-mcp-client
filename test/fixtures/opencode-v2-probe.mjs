@@ -26,7 +26,7 @@ const userPlugin = join(root, 'user-plugin'); mkdirSync(userPlugin);
 writeFileSync(join(userPlugin, 'index.js'), `export default {id:'borg.native-fixture.user',async setup(ctx){ await ctx.session.hook('context',event=>event.system.push({type:'text',text:'Fixture user plugin survived'})); }};`);
 mkdirSync(join(root, '.config', 'opencode'), {recursive:true});
 const userConfigPath = join(root, '.config', 'opencode', 'opencode.jsonc');
-const userConfig = '{// User configuration must survive the launch\n"plugins":' + JSON.stringify([userPlugin]) + (direct ? ',"mcp":{"servers":{"borg":{"type":"local","command":["user-borg-placeholder"],"codemode":false}}}' : '') + '}\n';
+const userConfig = '{// User configuration must survive the launch\n"plugins":' + JSON.stringify([userPlugin]) + ',"permissions":[{"action":"borg_borg_*","resource":"*","effect":"ask"}]' + (direct ? ',"mcp":{"servers":{"borg":{"type":"local","command":["user-borg-placeholder"],"codemode":false}}}' : '') + '}\n';
 writeFileSync(userConfigPath, userConfig);
 const provider = createServer(async (req, res) => {
   let input = ''; for await (const chunk of req) input += chunk;
@@ -93,7 +93,8 @@ try {
       tui = new EventEmitter(); tui.kill = () => { tui.emit('exit', 0); tui.emit('close', 0); return true; };
       void (async () => {
         const { OpenCode } = await import('@opencode/client');
-        const client = OpenCode.make({ baseUrl: args[args.indexOf('--server') + 1], headers: { Authorization: 'Basic ' + Buffer.from('opencode:' + options.env.OPENCODE_PASSWORD).toString('base64') } });
+        const client = OpenCode.make({ baseUrl: args[args.indexOf('--server') + 1], headers: { Authorization: 'Basic ' + Buffer.from('opencode:' + options.env.OPENCODE_PASSWORD).toString('base64') },
+          fetch: (input, init) => fetch(input, {...init, signal: init?.signal ?? AbortSignal.timeout(15_000)}) });
         nativeClient = client;
         for (let i = 0; i < 100; i++) {
           const mcp = await client.mcp.list({ location: { directory } });

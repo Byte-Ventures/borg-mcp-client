@@ -166,7 +166,7 @@ export async function launchOpenCodeV2Process(options) {
                 }
                 await new Promise(resolve => setTimeout(resolve, 100));
             }
-            for (const warning of await applyOpenCodeV2LaunchPermissions(transport.client, sessionID, directory, options.skipApprovalOverride === true))
+            for (const warning of await applyOpenCodeV2LaunchPermissions(transport.client, sessionID, directory, options.skipApprovalOverride === true, [directory, ...(options.env.BORG_LAUNCH_SCRATCH ? [options.env.BORG_LAUNCH_SCRATCH] : [])]))
                 console.error(`warning: ${warning}`);
             const launchArgs = selectOpenCodeAdapter(installation).buildTuiArgs({ directory,
                 port: Number(new URL(server.url).port), sessionId: sessionID, prompt: options.prompt, passthroughArgs: args.rest });
