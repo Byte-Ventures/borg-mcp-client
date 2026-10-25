@@ -148,7 +148,15 @@ try {
     assert.ok(calls.every(call => call.meta?.['ai.opencode/sessionID'] === descriptor.sessionID));
     assert.ok((await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('3+ state-changing'), 'Nested shell operations counted once each');
     await callOpenCodeV2Broker(descriptor, '/logged', { sessionID: descriptor.sessionID });
-  } else assert.ok(logged, 'Actual Borg MCP persisted a log after the native nested audit nudge');
+  } else {
+    assert.ok((await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('3+ state-changing'),
+      'Real Borg reads and nested shell operations completed before the audit follow-up');
+    // Native context hooks run at generation boundaries. The next prompt
+    // exposes the newly accumulated audit nudge to the provider.
+    await callOpenCodeV2Broker(descriptor, '/wake', { key: 'audit-followup', text: 'Local audit follow-up', source: 'audit-followup' });
+    await nativeClient.session.wait({ sessionID: descriptor.sessionID });
+    assert.ok(logged, 'Actual Borg MCP persisted a log after the native nested audit nudge');
+  }
   assert.ok(!(await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('Heads up:'));
   const wake = await callOpenCodeV2Broker(descriptor, '/wake', { key:'wake-fixture', text:'Local wake fixture', source:'source-fixture' });
   const duplicate = await callOpenCodeV2Broker(descriptor, '/wake', { key:'wake-fixture', text:'Local wake fixture', source:'source-fixture' });

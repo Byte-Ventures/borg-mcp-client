@@ -44,7 +44,15 @@ foreach ($rule in $acl.Access) {
 }
 `;
     try {
-        execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename }, stdio: 'ignore', timeout: 10_000, windowsHide: true });
+        const encoded = Buffer.from(script, 'utf16le').toString('base64');
+        const options = { env: { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename }, stdio: 'ignore', timeout: 10_000, windowsHide: true };
+        // Compiled Bun hosts can hang when spawning native Windows programs:
+        // https://github.com/oven-sh/bun/issues/32011. Only the fixed command and
+        // base64 script enter the shell; the operator's path remains env data.
+        if (process.versions.bun)
+            execFileSync(`powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { ...options, shell: true });
+        else
+            execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], options);
     }
     catch {
         throw new Error('OpenCode private launch state must be owned by and accessible only to the current Windows user.');
