@@ -18,10 +18,10 @@ export function readOpenCodeV2Descriptor(filename) {
     verifyOpenCodePrivateWindowsPath(parent);
     verifyOpenCodePrivateWindowsPath(filename);
     const dir = fs.lstatSync(parent);
-    const fd = openSync(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const fd = openSync(filename, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW ?? 0));
     try {
         const stat = fstatSync(fd);
-        const uid = process.getuid?.();
+        const uid = process.platform === 'win32' ? undefined : process.getuid?.();
         if (!dir.isDirectory() || !stat.isFile() || stat.size > 16_384 ||
             (uid !== undefined && (dir.uid !== uid || stat.uid !== uid)) ||
             (process.platform !== 'win32' && ((dir.mode & 0o777) !== 0o700 || (stat.mode & 0o777) !== 0o600))) {
@@ -76,7 +76,9 @@ export async function startOpenCodeV2Broker(options) {
     if (!/^[\w-]{43}$/.test(launch))
         throw new Error('Invalid OpenCode launch identity');
     const capability = randomBytes(32).toString('base64url');
+    const pluginCapability = randomBytes(32).toString('base64url');
     const descriptorPath = path.join(root, `opencode-v2-${launch}.json`);
+    const pluginDescriptorPath = `${descriptorPath}.plugin`;
     const journalPath = path.join(root, `opencode-v2-${launch}.journal.json`);
     let sessionID = options.sessionID;
     let pluginReady = false;
@@ -296,7 +298,12 @@ export async function startOpenCodeV2Broker(options) {
         res.setHeader('Content-Type', 'application/json');
         const auth = Buffer.from(req.headers.authorization ?? '');
         const expected = Buffer.from(`Bearer ${capability}`);
-        if (req.method !== 'POST' || req.headers.origin || auth.length !== expected.length || !timingSafeEqual(auth, expected)) {
+        const pluginExpected = Buffer.from(`Bearer ${pluginCapability}`);
+        const authenticated = auth.length === expected.length && timingSafeEqual(auth, expected);
+        const authenticatedPlugin = auth.length === pluginExpected.length && timingSafeEqual(auth, pluginExpected);
+        const pluginOperations = ['/human', '/ready', '/unready', '/catalog', '/mcp-options', '/audit-begin', '/audit'];
+        if (req.method !== 'POST' || req.headers.origin || (!authenticated && !authenticatedPlugin) ||
+            (pluginOperations.includes(req.url ?? '') && !authenticatedPlugin)) {
             res.writeHead(403).end('{}');
             return;
         }
@@ -331,7 +338,9 @@ export async function startOpenCodeV2Broker(options) {
         throw new Error('Broker did not bind loopback');
     const descriptor = { generation: 2, launch, capability, seat: options.seat,
         sessionID, server: options.server, url: `http://127.0.0.1:${address.port}` };
+    const pluginDescriptor = { ...descriptor, capability: pluginCapability };
     fs.writeFileSync(descriptorPath, JSON.stringify(descriptor), { flag: 'wx', mode: 0o600 });
+    fs.writeFileSync(pluginDescriptorPath, JSON.stringify(pluginDescriptor), { flag: 'wx', mode: 0o600 });
     persist();
     const timer = setInterval(() => {
         const task = serial.then(async () => {
@@ -351,18 +360,22 @@ export async function startOpenCodeV2Broker(options) {
             await verifySession(id);
             sessionID = id;
             descriptor.sessionID = id;
+            pluginDescriptor.sessionID = id;
             const temp = `${descriptorPath}.tmp`;
             fs.writeFileSync(temp, JSON.stringify(descriptor), { mode: 0o600 });
             fs.renameSync(temp, descriptorPath);
+            fs.writeFileSync(temp, JSON.stringify(pluginDescriptor), { mode: 0o600 });
+            fs.renameSync(temp, pluginDescriptorPath);
             persist();
         },
-        call: (operation, body = {}) => callOpenCodeV2Broker(descriptor, operation, body),
+        call: (operation, body = {}) => callOpenCodeV2Broker(['/human', '/ready', '/unready', '/catalog', '/mcp-options', '/audit-begin', '/audit'].includes(operation) ? pluginDescriptor : descriptor, operation, body),
         async close() {
             revoked = true;
             clearInterval(timer);
             server.closeAllConnections();
             await new Promise((resolve) => server.close(() => resolve()));
             fs.rmSync(descriptorPath, { force: true });
+            fs.rmSync(pluginDescriptorPath, { force: true });
             // The credential-free journal is useful for diagnosis; no replay into a
             // new private server is attempted after the owning launcher has exited.
         },

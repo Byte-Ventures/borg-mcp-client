@@ -16,6 +16,9 @@ import { installTestServer, openRealServer } from '../../test/support/real-serve
 import { fakeCodex, fakeOpenCode } from '../../test/support/fake-agents.mjs';
 
 const enabled = process.env.BORG_E2E === '1';
+if (process.env.CI === 'true' && process.env.OPENCODE_TEST_V2_BINARY && !enabled) {
+  throw new Error('The native OpenCode fleet gate was requested but BORG_E2E was cleared by test setup.');
+}
 const root = resolve(import.meta.dirname, '../..');
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

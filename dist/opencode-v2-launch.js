@@ -110,6 +110,8 @@ export async function launchOpenCodeV2Process(options) {
         delete env.OPENCODE_PERMISSION;
         let server;
         let broker;
+        let phase = 'private server startup';
+        let kickoffAttempted = false;
         const cleanup = async () => {
             await broker?.close();
             await server?.close();
@@ -117,12 +119,15 @@ export async function launchOpenCodeV2Process(options) {
         };
         try {
             server = await startOpenCodeV2Server({ installation, directory, env });
+            phase = 'configuration inspection';
             const transport = await createOpenCodeV2Transport(server);
             const mcpOptions = preserveOpenCodeV2McpOptions(await transport.client.config.get({ location: { directory } }));
             const { Session } = await import('@opencode/schema/session');
             let sessionID = args.sessionID ?? Session.ID.create();
+            phase = 'session broker startup';
             broker = await startOpenCodeV2Broker({ launch, transport, seat, sessionID, mcpOptions,
                 server: { pid: server.pid, version: server.version }, orientation: () => renderOrientation(directory, env) });
+            phase = 'session selection';
             if (args.continue) {
                 // Native --continue is an explicit user request; never use this list
                 // heuristic for later autonomous wake/session switching.
@@ -143,6 +148,7 @@ export async function launchOpenCodeV2Process(options) {
                 await transport.client.session.create({ id: sessionID, location: { directory }, title: 'Borg' });
             }
             await broker.selectSession(sessionID);
+            phase = 'runtime plugin readiness';
             // The published native host lazily loads plugins on prompt admission,
             // not on metadata/registry reads. Queue an inert, non-resuming probe and
             // cancel it before attaching the TUI or admitting the real kickoff.
@@ -155,6 +161,7 @@ export async function launchOpenCodeV2Process(options) {
             const status = await broker.call('/status');
             if (!status.pluginReady)
                 throw new OpenCodeV2LaunchError('OpenCode 2 Borg plugin did not become ready. No kickoff was submitted.');
+            phase = 'Borg tool registry readiness';
             const mcpDeadline = Date.now() + 15_000;
             while (seat.droneId !== 'unassimilated') {
                 const mcp = await transport.client.mcp.list({ location: { directory } });
@@ -166,11 +173,13 @@ export async function launchOpenCodeV2Process(options) {
                 }
                 await new Promise(resolve => setTimeout(resolve, 100));
             }
+            phase = 'permission inspection';
             for (const warning of await applyOpenCodeV2LaunchPermissions(transport.client, sessionID, directory, options.skipApprovalOverride === true, [directory, ...(options.env.BORG_LAUNCH_SCRATCH ? [options.env.BORG_LAUNCH_SCRATCH] : [])]))
                 console.error(`warning: ${warning}`);
             const launchArgs = selectOpenCodeAdapter(installation).buildTuiArgs({ directory,
                 port: Number(new URL(server.url).port), sessionId: sessionID, prompt: options.prompt, passthroughArgs: args.rest });
             verifyOpenCodeExecutableStillMatches(installation, env);
+            phase = 'TUI attachment';
             const child = (options.spawnProcess ?? spawn)(installation.executable, launchArgs, { cwd: directory, stdio: 'inherit', shell: false, env: { ...env, ...server.tuiEnv() } });
             let stopped = false;
             child.once('error', () => { stopped = true; void cleanup(); });
@@ -184,6 +193,8 @@ export async function launchOpenCodeV2Process(options) {
                 child.kill();
                 throw new OpenCodeV2LaunchError('OpenCode 2 exited before kickoff admission.');
             }
+            phase = 'kickoff admission';
+            kickoffAttempted = true;
             const admission = await broker.call('/wake', { text: options.prompt, key: 'kickoff', source: 'kickoff', allowSubmit: true });
             if (!admission.accepted) {
                 child.kill();
@@ -201,7 +212,9 @@ export async function launchOpenCodeV2Process(options) {
             }
             if (error instanceof OpenCodeV2LaunchError)
                 throw error;
-            throw new OpenCodeV2LaunchError('OpenCode 2 could not verify its session, plugin, or launch configuration. No kickoff was submitted. Check the selected session and worktree, then relaunch Borg.');
+            throw new OpenCodeV2LaunchError(`OpenCode 2 failed during ${phase}. ${kickoffAttempted
+                ? 'Kickoff admission is unconfirmed; inspect the session before submitting it again.'
+                : 'No kickoff was submitted. Check the selected session and worktree, then relaunch Borg.'}`);
         }
     }
     throw new Error('OpenCode changed repeatedly during launch. Relaunch Borg.');

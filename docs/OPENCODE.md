@@ -17,6 +17,8 @@ worktree, and attaches the TUI. It does not start, replace, or stop your shared
 OpenCode service. Exiting the TUI closes the private server and revokes its
 session broker. The root API password stays in launcher memory and the attached
 TUI environment; the MCP process receives a separate, session-scoped capability.
+The orientation plugin has its own capability for human-session handoffs; the
+MCP wake credential cannot authorize a handoff or change plugin readiness.
 
 Use `borg --cli opencode --session <id>` or `borg --cli opencode --continue` to
 resume a V2 session. Borg checks the selected session's worktree and saved drone

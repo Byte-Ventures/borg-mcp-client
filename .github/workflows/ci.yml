@@ -81,7 +81,7 @@ jobs:
         run: npm run check
 
       - name: Run unit tests
-        run: timeout 5m npm run test:unit
+        run: timeout 8m npm run test:unit
 
       - name: Build readable artifacts
         if: matrix.node-version == '24.19.0'

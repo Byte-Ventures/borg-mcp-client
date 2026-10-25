@@ -24,7 +24,7 @@ export default {
   async setup(ctx) {
     const filename = process.env.BORG_OPENCODE_V2_DESCRIPTOR;
     if (process.env.BORG_SESSION !== '1' || !filename) return;
-    const descriptor = readOpenCodeV2Descriptor(filename);
+    const descriptor = readOpenCodeV2Descriptor(filename + '.plugin');
     const call = (operation, input) => callOpenCodeV2Broker(descriptor, operation, input);
     // Native MCP entries are replaced across config sources. An overlay that
     // omits codemode would otherwise erase a file's explicit false. Read the

@@ -47,7 +47,6 @@ import { confirmDisplayIdentity, identityFromRegen, markDisplayIdentityReadFaile
 import { resolveSessionAgentKind, } from './codex-app-wake.js';
 import { resolveReportableSessionAgentKind } from './agent-runtime.js';
 import { connectOpenCodeDrone, injectOpenCodeEntry, settleOpenCodeEntry, configuredOpenCodePort, OPEN_CODE_PORT_MISSING_DIAGNOSTIC, openCodeLaunchBinding, writeOpenCodeStartupDiagnostic, } from './opencode-drone.js';
-import { installBorgPlugin } from './opencode-plugin.js';
 import { openCodeApiPasswordFromEnv, openCodeLaunchCorrelationFromEnv } from './opencode-launch-trust.js';
 import { setModuleInjectOpenCode } from './log-stream.js';
 import { lifecycleSignalForMessage, recordLifecycleLog, shouldSuppressLifecycleLog, } from './lifecycle-log-guard.js';
@@ -199,13 +198,13 @@ export async function main() {
             startLogStream();
         },
         // gh#opencode: initialize opencode drone module for autonomous entry
-        // injection. Installs the plugin (idempotent) and connects the SDK client
+        // injection. The launcher owns plugin installation and selects its version;
+        // an MCP child must never write a V1 file into V2's shared autoload directory.
+        // Connect the session transport
         // when the runtime is opencode (BORG_OPENCODE=1). The module-level
         // injectOpenCode hook routes SSE entries into the TUI's session.
         // Best-effort; never breaks the MCP server.
         openCode: async () => {
-            if (!process.env[OPENCODE_V2_DESCRIPTOR_ENV] && process.env.BORG_OPENCODE_PLUGIN_MODE !== 'launch')
-                installBorgPlugin();
             const active = await getActiveCube();
             if (active && openCodeRuntime) {
                 if (await connectOpenCodeRuntime(active)) {

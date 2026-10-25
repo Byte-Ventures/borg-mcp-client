@@ -121,7 +121,9 @@ export default function setup(): () => void {
   const protectedConfig = process.env.BORG_TEST_GUARD_PROTECTED_CONFIG ?? realBorgConfig();
   const before = snapshotTree(protectedConfig);
   const markers = scanForMarkers(protectedConfig);
+  const ciFleet = process.env.CI === 'true' && process.env.BORG_E2E === '1';
   for (const key of Object.keys(process.env)) if (key.startsWith('BORG_')) delete process.env[key];
+  if (ciFleet) process.env.BORG_E2E = '1';
   const realHome = realpathSync(userInfo().homedir);
   const temporary = realpathSync(tmpdir());
   // The run's own roots may lie inside the real home only in the cube's scratch area.
@@ -133,6 +135,7 @@ export default function setup(): () => void {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'borg-test-run-home-')));
   process.env[TEST_ALLOWED_ROOTS_ENV] = [temporary, home].join(delimiter);
   process.env.HOME = home;
+  if (process.platform === 'win32') process.env.USERPROFILE = home;
   process.env.XDG_CONFIG_HOME = join(home, '.config');
   return () => {
     rmSync(home, { recursive: true, force: true });

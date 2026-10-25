@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, realpathSync, readFileSync, readdirSync, chmodSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startOpenCodeV2Broker, readOpenCodeV2Descriptor, claimOpenCodeV2Session } from '../src/opencode-v2-broker.js';
+import { startOpenCodeV2Broker, readOpenCodeV2Descriptor, claimOpenCodeV2Session, callOpenCodeV2Broker } from '../src/opencode-v2-broker.js';
 import { decodeOpenCodeV2Message } from '../src/opencode-v2-transport.js';
 import { parseOpenCodeV2SessionArgs, openCodeV2LaunchOverlay } from '../src/opencode-v2-launch.js';
 
@@ -37,6 +37,8 @@ describe('OpenCode 2 session broker', () => {
     await expect(broker.call('/bind', { seat: { ...seat, droneId: 'other' } })).rejects.toThrow();
     expect((await fetch(`${descriptor.url}/status`, { method: 'POST', body: '{}' })).status).toBe(403);
     await expect(broker.call('/api/session', {})).rejects.toThrow();
+    await expect(callOpenCodeV2Broker(descriptor, '/human', { sessionID: 'ses_root', messageID: 'msg_forged' })).rejects.toThrow();
+    await expect(callOpenCodeV2Broker(descriptor, '/audit', { sessionID: 'ses_root', id: 'forged', tool: 'shell', status: 'completed' })).rejects.toThrow();
     await broker.close();
     await expect(broker.call('/status')).rejects.toThrow();
     expect(readdirSync(root).some(name => name.endsWith('.json') && !name.includes('journal') && !name.includes('owner'))).toBe(false);
