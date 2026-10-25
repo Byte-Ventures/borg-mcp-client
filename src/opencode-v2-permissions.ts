@@ -39,8 +39,15 @@ export async function applyOpenCodeV2LaunchPermissions(client: OpenCodeClient, s
       ? `OpenCode restricts ${restrictive.length} Borg coordination tools. To allow them, append: ${JSON.stringify({ permissions: additions })}`
       : `Applied launch-only approvals for ${restrictive.length} Borg coordination tools. ${BORG_DISPATCHER_APPROVAL_DISCLOSURE}`);
   }
+  // A parent-directory grant must not erase narrower operator rules. Replay
+  // scoped directory rules in their original order, including exceptions that
+  // allow a child of a denied directory. Global defaults still allow the new
+  // grant to do its intended work.
+  const scopedDirectoryRules = access.length ? rules.filter(rule =>
+    matches(rule.action, 'external_directory') && rule.resource !== '*')
+    .map(rule => ({ ...rule, action: 'external_directory' })) : [];
   if (access.length || (restrictive.length && !skipOverride)) await client.session.update({ sessionID, permissions: [
-    ...(session.permissions ?? []), ...access,
+    ...(session.permissions ?? []), ...access, ...scopedDirectoryRules,
     ...(!skipOverride ? restrictive.map(action => ({ action, resource: '*', effect: 'allow' as const })) : []),
   ] });
   return warnings;

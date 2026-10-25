@@ -134,9 +134,11 @@ export async function launchOpenCodeV2Process(options: {
       }
       if (args.sessionID) {
         try { await transport.client.session.get({ sessionID }); }
-        catch { await transport.client.session.create({ id: sessionID, location: { directory } }); }
+        catch { await transport.client.session.create({ id: sessionID, location: { directory } }, { signal: AbortSignal.timeout(60_000) }); }
       } else if (!args.continue || sessionID === broker.descriptor.sessionID) {
-        await transport.client.session.create({ id: sessionID, location: { directory }, title: 'Borg' });
+        // Creating the first native instance can initialize plugins/providers.
+        // Keep that startup bounded without applying its longer limit to wakes.
+        await transport.client.session.create({ id: sessionID, location: { directory }, title: 'Borg' }, { signal: AbortSignal.timeout(60_000) });
       }
       phase = 'session binding';
       await broker.selectSession(sessionID);

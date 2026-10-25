@@ -83,6 +83,30 @@ it('grants only declared V2 launch directories and preserves specific operator d
     const client: any = { session: { get: async () => ({ agent: 'build', permissions: [] }), update },
       config: { get: async () => [] }, agent: { get: async () => ({ data: { permissions: rules } }) } };
     await applyOpenCodeV2LaunchPermissions(client, 'ses_a', root, true, [scratch, blocked]);
-    expect(update.mock.calls[0][0].permissions).toEqual([{ action: 'external_directory', resource: resource(scratch), effect: 'allow' }]);
+    const permissions = [...rules, ...update.mock.calls[0][0].permissions];
+    expect(effectiveOpenCodeV2Permission(permissions, 'external_directory', scratch.replace(/\\/g, '/') + '/file')).toBe('allow');
+    expect(effectiveOpenCodeV2Permission(permissions, 'external_directory', blocked.replace(/\\/g, '/') + '/file')).toBe('deny');
+    expect(effectiveOpenCodeV2Permission(permissions, 'external_directory', root.replace(/\\/g, '/') + '/unrelated/file')).toBe('ask');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('preserves child-directory denials and ordered exceptions inside a launch grant', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-oc-child-access-')));
+  try {
+    const prefix = root.replace(/\\/g, '/');
+    const rules = [
+      { action: '*', resource: '*', effect: 'allow' as const },
+      { action: 'external_directory', resource: '*', effect: 'ask' as const },
+      { action: 'external_directory', resource: `${prefix}/private/*`, effect: 'deny' as const },
+      { action: 'external_directory', resource: `${prefix}/private/public/*`, effect: 'allow' as const },
+    ];
+    const update = vi.fn(async () => {});
+    const client: any = { session: { get: async () => ({ permissions: [] }), update },
+      config: { get: async () => [] }, agent: { get: async () => ({ data: { permissions: rules } }) } };
+    await applyOpenCodeV2LaunchPermissions(client, 'ses_a', root, true, [root]);
+    const permissions = [...rules, ...update.mock.calls[0][0].permissions];
+    expect(effectiveOpenCodeV2Permission(permissions, 'external_directory', `${prefix}/file`)).toBe('allow');
+    expect(effectiveOpenCodeV2Permission(permissions, 'external_directory', `${prefix}/private/file`)).toBe('deny');
+    expect(effectiveOpenCodeV2Permission(permissions, 'external_directory', `${prefix}/private/public/file`)).toBe('allow');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
