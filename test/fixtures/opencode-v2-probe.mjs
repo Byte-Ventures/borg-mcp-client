@@ -28,7 +28,9 @@ globalThis.fetch = async (input, init) => {
       try {
         const state = await originalFetch(new URL('/api/plugin', typeof input === 'string' || input instanceof URL ? input : input.url),
           { headers: init?.headers, signal: AbortSignal.timeout(5_000) });
-        nativePlugins = JSON.stringify(await state.json()).replace(/[A-Za-z0-9_-]{43,}/g, '[redacted]').slice(0, 4000);
+        const plugins = await state.json();
+        nativePlugins = JSON.stringify(plugins.data?.filter(plugin => plugin.source?.type !== 'builtin' || plugin.state?.status !== 'active'))
+          .replace(/[A-Za-z0-9_-]{43,}/g, '[redacted]').slice(0, 6000);
       } catch {}
     }
     return response;
