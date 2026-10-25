@@ -5,7 +5,7 @@ import { openSync } from './guarded-fs.js';
 import path from 'node:path';
 import { fs } from './guarded-fs.js';
 import { isCanonicalPath } from './private-root.js';
-import { openCodePrivateRoot, ensureOpenCodePrivateRoot, verifyOpenCodePrivateWindowsPath, sameOpenCodeDirectory } from './opencode-private-state.js';
+import { openCodePrivateRoot, ensureOpenCodePrivateRoot, verifyOpenCodePrivateWindowsPath, verifyOpenCodePrivateWindowsPathAsync, sameOpenCodeDirectory } from './opencode-private-state.js';
 import { LOG_AUDIT_NUDGE } from './log-audit-core.js';
 import type { OpenCodeV2Transport } from './opencode-v2-transport.js';
 
@@ -24,10 +24,20 @@ const sameSeat = (a: OpenCodeV2Seat, b: OpenCodeV2Seat) =>
 
 /** Use an opened fd for validation and reading; refuse path substitution/symlinks. */
 export function readOpenCodeV2Descriptor(filename: string): OpenCodeV2Descriptor {
+  verifyOpenCodePrivateWindowsPath(path.dirname(filename));
+  verifyOpenCodePrivateWindowsPath(filename);
+  return readValidatedDescriptor(filename);
+}
+
+export async function readOpenCodeV2DescriptorAsync(filename: string): Promise<OpenCodeV2Descriptor> {
+  await verifyOpenCodePrivateWindowsPathAsync(path.dirname(filename));
+  await verifyOpenCodePrivateWindowsPathAsync(filename);
+  return readValidatedDescriptor(filename);
+}
+
+function readValidatedDescriptor(filename: string): OpenCodeV2Descriptor {
   if (!isCanonicalPath(filename) || realpathSync(filename) !== filename) throw new Error('OpenCode 2 launch descriptor is not canonical.');
   const parent = path.dirname(filename);
-  verifyOpenCodePrivateWindowsPath(parent);
-  verifyOpenCodePrivateWindowsPath(filename);
   const dir = fs.lstatSync(parent);
   const fd = openSync(filename, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW ?? 0));
   try {

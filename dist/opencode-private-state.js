@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { realpathSync, statSync } from 'node:fs';
 import { fs } from './guarded-fs.js';
 import { borgConfigRoot, ensurePrivateBorgConfigRootSync, isCanonicalPath } from './private-root.js';
@@ -25,8 +25,8 @@ export function sameOpenCodeDirectory(left, right) {
     const normalized = (value) => value.replace(/^\\\\\?\\/, '').replace(/^[A-Z]:/, drive => drive.toLowerCase());
     return normalized(a) === normalized(b);
 }
-function windowsAcl(filename, initialize) {
-    const script = `
+function windowsAclScript(initialize) {
+    return `
 $ErrorActionPreference = 'Stop'
 $p = $env:BORG_OPENCODE_PRIVATE_PATH
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -43,19 +43,14 @@ foreach ($rule in $acl.Access) {
   if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { exit 1 }
 }
 `;
+}
+const privateStateError = () => new Error('OpenCode private launch state must be owned by and accessible only to the current Windows user.');
+function windowsAcl(filename, initialize) {
     try {
-        const encoded = Buffer.from(script, 'utf16le').toString('base64');
-        const options = { env: { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename }, stdio: 'ignore', timeout: 10_000, windowsHide: true };
-        // Compiled Bun hosts can hang when spawning native Windows programs:
-        // https://github.com/oven-sh/bun/issues/32011. Only the fixed command and
-        // base64 script enter the shell; the operator's path remains env data.
-        if (process.versions.bun)
-            execFileSync(`powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { ...options, shell: true });
-        else
-            execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], options);
+        execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsAclScript(initialize), 'utf16le').toString('base64')], { env: { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename }, stdio: 'ignore', timeout: 10_000, windowsHide: true });
     }
     catch {
-        throw new Error('OpenCode private launch state must be owned by and accessible only to the current Windows user.');
+        throw privateStateError();
     }
 }
 export function ensureOpenCodePrivateRoot(root = openCodePrivateRoot()) {
@@ -78,5 +73,17 @@ export function ensureOpenCodePrivateRoot(root = openCodePrivateRoot()) {
 export function verifyOpenCodePrivateWindowsPath(filename) {
     if (process.platform === 'win32')
         windowsAcl(filename, false);
+}
+/** Native OpenCode uses compiled Bun, whose synchronous Windows subprocesses
+ * can hang. Keep the same ACL policy but await an asynchronous child there. */
+export async function verifyOpenCodePrivateWindowsPathAsync(filename) {
+    if (process.platform !== 'win32')
+        return;
+    await new Promise((resolve, reject) => {
+        const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsAclScript(false), 'utf16le').toString('base64')], { env: { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename }, stdio: 'ignore', windowsHide: true, shell: false });
+        const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(privateStateError()); }, 10_000);
+        child.once('error', () => { clearTimeout(timeout); reject(privateStateError()); });
+        child.once('close', code => { clearTimeout(timeout); code === 0 ? resolve() : reject(privateStateError()); });
+    });
 }
 //# sourceMappingURL=opencode-private-state.js.map

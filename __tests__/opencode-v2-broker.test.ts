@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, realpathSync, readFileSync, readdirSync, chmodSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startOpenCodeV2Broker, readOpenCodeV2Descriptor, claimOpenCodeV2Session, callOpenCodeV2Broker } from '../src/opencode-v2-broker.js';
+import { startOpenCodeV2Broker, readOpenCodeV2Descriptor, readOpenCodeV2DescriptorAsync, claimOpenCodeV2Session, callOpenCodeV2Broker } from '../src/opencode-v2-broker.js';
 import { decodeOpenCodeV2Message } from '../src/opencode-v2-transport.js';
 import { parseOpenCodeV2SessionArgs, openCodeV2LaunchOverlay } from '../src/opencode-v2-launch.js';
 
@@ -32,6 +32,7 @@ describe('OpenCode 2 session broker', () => {
   it('gives MCP only a private session capability and revokes it at shutdown', async () => {
     const { broker, seat } = await fixture();
     const descriptor = readOpenCodeV2Descriptor(broker.descriptorPath);
+    expect(await readOpenCodeV2DescriptorAsync(broker.descriptorPath)).toEqual(descriptor);
     expect(descriptor.server).toEqual({ pid: 123, version: '2.1.2' });
     expect(await broker.call('/bind', { seat })).toMatchObject({ sessionID: 'ses_root', generation: 2 });
     await expect(broker.call('/bind', { seat: { ...seat, droneId: 'other' } })).rejects.toThrow();

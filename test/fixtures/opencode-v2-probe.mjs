@@ -85,7 +85,9 @@ const provider = createServer(async (req, res) => {
   const shouldCall = toolCalls.length > 0;
   providerSteps.push({ actionIndex, paths, logPath, shellPath,
     nudge: /Heads up: (\d+)\+ state-changing/.exec(system)?.[1],
-    discoveredPaths, calls: toolCalls.map(call => call.function.name) });
+    discoveredPaths: [...discoveredPaths], calls: toolCalls.map(call => call.function.name),
+    toolResults: body.messages.filter(message => message.role === 'tool').map(message =>
+      String(message.content).replace(/[A-Za-z0-9_-]{43,}/g, '[redacted]').slice(0, 1500)) });
   res.setHeader('Content-Type', 'text/event-stream');
   for (const chunk of [
     { choices: [{ index: 0, delta: shouldCall ? { role: 'assistant', tool_calls: toolCalls } : { role: 'assistant', content: 'Fixture complete.' }, finish_reason: null }] },
@@ -172,5 +174,5 @@ try {
   throw error;
 } finally {
   globalThis.fetch = originalFetch;
-  await launch?.cleanup(); provider.closeAllConnections(); await new Promise(resolve => provider.close(resolve)); if (!realSeat) rmSync(root, { recursive: true, force: true });
+  await launch?.cleanup(); provider.closeAllConnections(); await new Promise(resolve => provider.close(resolve)); if (!realSeat) rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 }

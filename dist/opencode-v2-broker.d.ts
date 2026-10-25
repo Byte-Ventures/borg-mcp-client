@@ -19,6 +19,7 @@ export interface OpenCodeV2Descriptor {
 }
 /** Use an opened fd for validation and reading; refuse path substitution/symlinks. */
 export declare function readOpenCodeV2Descriptor(filename: string): OpenCodeV2Descriptor;
+export declare function readOpenCodeV2DescriptorAsync(filename: string): Promise<OpenCodeV2Descriptor>;
 /** Claims outlive launches so --continue cannot take another drone's session. */
 export declare function claimOpenCodeV2Session(sessionID: string, seat: OpenCodeV2Seat, root?: string): void;
 export declare function startOpenCodeV2Broker(options: {
