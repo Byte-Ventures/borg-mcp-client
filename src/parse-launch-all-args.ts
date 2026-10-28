@@ -1,7 +1,9 @@
 // gh#556 Part 2 — argument parser for `borg launch-all [cube] [flags]` (spec §9.1).
 // Pure: rawArgs → validated LaunchAllArgs | error. Mirror of parse-assimilate-args.
+import type { BorgCli } from './cubes.js';
 
 export interface LaunchAllFlags {
+  cli?: BorgCli;
   mode?: 'tmux' | 'terminals' | 'pastelist';
   only?: string;
   dryRun?: boolean;
@@ -27,7 +29,7 @@ export type ParseLaunchAllResult =
   | { ok: false; error: string };
 
 const SUPPORTED =
-  '--mode <tmux|terminals|pastelist>, --only <name>, --dry-run, ' +
+  '--cli <claude|codex|opencode>, --mode <tmux|terminals|pastelist>, --only <name>, --dry-run, ' +
   '--no-attach, --yes/-y, --force, --launch-delay <ms>';
 
 export function parseLaunchAllArgs(rawArgs: string[]): ParseLaunchAllResult {
@@ -36,6 +38,14 @@ export function parseLaunchAllArgs(rawArgs: string[]): ParseLaunchAllResult {
 
   for (let i = 0; i < rawArgs.length; i++) {
     const arg = rawArgs[i];
+    if (arg === '--cli' || arg.startsWith('--cli=')) {
+      const value = arg === '--cli' ? rawArgs[++i] : arg.slice('--cli='.length);
+      if (value !== 'claude' && value !== 'codex' && value !== 'opencode') {
+        return { ok: false, error: '--cli requires claude, codex, or opencode' };
+      }
+      flags.cli = value;
+      continue;
+    }
     switch (arg) {
       case '--mode': {
         const v = rawArgs[++i];

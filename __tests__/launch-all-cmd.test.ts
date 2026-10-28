@@ -7,6 +7,7 @@ import {
 } from '../src/launch-all-cmd';
 import type { LaunchAllDeps } from '../src/launch-all-deps';
 import type { ActiveCube } from '../src/cubes';
+import { parseLaunchAllArgs } from '../src/parse-launch-all-args';
 
 const CUBE_ID = '11111111-1111-1111-1111-111111111111';
 function did(n: number): string {
@@ -101,6 +102,65 @@ function makeTmuxFleetDeps(
 }
 
 describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
+  it.each(['claude', 'codex', 'opencode'])('forwards --cli %s through tmux, terminal, and printed launches', async (cli) => {
+    for (const mode of ['tmux', 'terminals', 'pastelist']) {
+      const { paths, identities } = fleet(2);
+      const deps = makeTmuxFleetDeps(paths, identities, {
+        isTTY: vi.fn(() => true),
+        pathExists: vi.fn(() => true),
+        getCliPreferenceForPath: vi.fn(async () => 'codex'),
+      });
+      const parsed = parseLaunchAllArgs(['myrepo', '--cli', cli, '--mode', mode, '--no-attach']);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) throw new Error(parsed.error);
+      expect(await runLaunchAll(parsed.args, deps, OPTS)).toBe(0);
+      const commands = mode === 'pastelist'
+        ? stdoutOf(deps)
+        : (deps.runSync as any).mock.calls
+          .filter(([cmd, args]: [string, string[]]) => cmd === 'osascript' || args[0] === 'send-keys')
+          .map(([, args]: [string, string[]]) => args.join(' ')).join('\n');
+      for (const { cube } of identities) {
+        expect(commands).toContain(`launch '${cube.droneId}' --cli '${cli}'`);
+      }
+    }
+  });
+
+  it('passes the CLI to both worker and human-seat launches in default split mode', async () => {
+    const { paths, identities } = fleet(2);
+    identities[1].cube.isHumanSeat = true;
+    const deps = makeTmuxFleetDeps(paths, identities, {
+      isTTY: vi.fn(() => true),
+      pathExists: vi.fn(() => true),
+    });
+    expect(await runLaunchAll({ cubeName: 'myrepo', flags: { cli: 'opencode', noAttach: true } }, deps, OPTS)).toBe(0);
+    const calls = (deps.runSync as any).mock.calls;
+    expect(calls.find(([cmd, args]: [string, string[]]) => cmd === 'tmux' && args[0] === 'send-keys')[1][3])
+      .toContain(`launch '${did(1)}' --cli 'opencode'`);
+    expect(calls.find(([cmd]: [string]) => cmd === 'osascript')[1][1])
+      .toContain(`launch '${did(2)}' --cli 'opencode'`);
+  });
+
+  it('previews the override without starting or changing any drone', async () => {
+    const { paths, identities } = fleet(2);
+    const deps = makeTmuxFleetDeps(paths, identities);
+    expect(await runLaunchAll({ cubeName: 'myrepo', flags: { cli: 'opencode', dryRun: true } }, deps, OPTS)).toBe(0);
+    expect(stdoutOf(deps)).toContain('[tmux] [opencode]');
+    expect(deps.writeFile).not.toHaveBeenCalled();
+    expect(deps.spawnDetached).not.toHaveBeenCalled();
+    expect((deps.runSync as any).mock.calls.some(([, args]: [string, string[]]) => args[0] === 'new-session')).toBe(false);
+  });
+
+  it('keeps --only and live-session skips when a CLI is selected', async () => {
+    const { paths, identities } = fleet(2);
+    const deps = makeTmuxFleetDeps(paths, identities, {
+      readFileOpt: vi.fn(() => JSON.stringify({ launchedAt: new Date(1000).toISOString() })),
+    });
+    expect(await runLaunchAll({ cubeName: 'myrepo', flags: { cli: 'opencode', only: 'drone-1', mode: 'pastelist' } }, deps, OPTS)).toBe(0);
+    expect(stdoutOf(deps)).not.toContain("--cli 'opencode'");
+    expect(deps.probeSeat).not.toHaveBeenCalled();
+    expect(deps.writeFile).not.toHaveBeenCalled();
+  });
+
   it('no cube argument + no active cube + no repo drone worktrees → cause-accurate error, exit 1', async () => {
     const deps = makeStubDeps({ getActiveCube: vi.fn(async () => null) });
     expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(1);

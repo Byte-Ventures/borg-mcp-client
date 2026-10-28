@@ -406,8 +406,9 @@ export async function runLaunchAll(args, deps, opts = {}) {
     // 5. --dry-run
     if (args.flags.dryRun) {
         deps.stdout(`borg launch-all (dry-run): would launch ${launchable.length} drone(s) for cube '${cubeName}':\n`);
-        for (const c of launchable)
-            deps.stdout(`  ${c.droneLabel}  ${c.worktreeDir}  [${destination(c)}]\n`);
+        for (const c of launchable) {
+            deps.stdout(`  ${c.droneLabel}  ${c.worktreeDir}  [${destination(c)}]${args.flags.cli ? ` [${args.flags.cli}]` : ''}\n`);
+        }
         return 0;
     }
     // 6. >6 confirmation
@@ -439,12 +440,12 @@ export async function runLaunchAll(args, deps, opts = {}) {
             const workers = backendLaunchable.filter((c) => c.seat.isHumanSeat === false);
             const terminals = backendLaunchable.filter((c) => c.seat.isHumanSeat !== false);
             if (workers.length > 0) {
-                await runTmuxBackend(workers, { sessionName, borgPath, attachMode: 'none', launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+                await runTmuxBackend(workers, { sessionName, borgPath, cli: args.flags.cli, attachMode: 'none', launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
             }
             if (workers.length > 0 && terminals.length > 0 && launchDelayMs > 0)
                 await sleep(launchDelayMs);
             if (terminals.length > 0) {
-                await runTerminalsBackend(terminals, { borgPath, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+                await runTerminalsBackend(terminals, { borgPath, cli: args.flags.cli, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
             }
             const attachMode = resolveAttachMode(args, deps);
             if (attachMode !== 'none') {
@@ -456,7 +457,7 @@ export async function runLaunchAll(args, deps, opts = {}) {
         }
         else if (sel.backend === 'tmux') {
             const attachMode = resolveAttachMode(args, deps);
-            await runTmuxBackend(backendLaunchable, { sessionName, borgPath, attachMode, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+            await runTmuxBackend(backendLaunchable, { sessionName, borgPath, cli: args.flags.cli, attachMode, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
             if (attachMode === 'none') {
                 if (!deps.isTTY()) {
                     deps.stderr(`Launching in detached mode — stdout is non-TTY. Attach manually with: tmux attach -t ${sessionName}\n`);
@@ -465,10 +466,10 @@ export async function runLaunchAll(args, deps, opts = {}) {
             }
         }
         else if (sel.backend === 'terminals') {
-            await runTerminalsBackend(backendLaunchable, { borgPath, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+            await runTerminalsBackend(backendLaunchable, { borgPath, cli: args.flags.cli, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
         }
         else {
-            runPastelistBackend(launchable, borgPath, deps);
+            runPastelistBackend(launchable, borgPath, deps, args.flags.cli);
             return 0; // pastelist: nothing to reconcile (operator pastes manually)
         }
     }

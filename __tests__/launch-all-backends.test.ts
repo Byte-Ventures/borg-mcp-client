@@ -269,6 +269,13 @@ describe('terminals backend (client#400 + control-char fold-in)', () => {
     expect(call[1].at(-1)).toContain("borg · drone-1 · myrepo");
   });
 
+  it('Linux terminal commands include the explicit CLI after the pinned drone id', async () => {
+    const deps = makeStubDeps({ getEnv: vi.fn((n: string) => n === 'BORG_TERMINAL' ? 'kitty' : undefined) });
+    await runTerminalsBackend([cand()], { ...wopts('linux'), cli: 'opencode' }, deps);
+    const call = (deps.spawnDetached as any).mock.calls.find((c: any[]) => c[0] === 'kitty');
+    expect(call[1].at(-1)).toContain(`launch '${cand().droneId}' --cli 'opencode'`);
+  });
+
   it('Linux escapes hostile server labels before building the OSC printf command', async () => {
     const deps = makeStubDeps({ getEnv: vi.fn((n: string) => (n === 'BORG_TERMINAL' ? 'kitty' : undefined)) });
     await runTerminalsBackend(

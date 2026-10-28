@@ -41,11 +41,16 @@ describe('parseLaunchAllArgs (gh#556 Part 2 §11.1)', () => {
   it('--dry-run → dryRun true', () => {
     expect(parseLaunchAllArgs(['--dry-run'])).toMatchObject({ ok: true, args: { flags: { dryRun: true } } });
   });
-  it('--cli is rejected as an unknown flag', () => {
-    expect(parseLaunchAllArgs(['--cli', 'codex'])).toMatchObject({
-      ok: false,
-      error: expect.stringContaining('unknown flag: --cli'),
-    });
+  it.each(['claude', 'codex', 'opencode'])('accepts --cli %s and the equals form with a cube and other options', (cli) => {
+    for (const flag of [['--cli', cli], [`--cli=${cli}`]]) {
+      expect(parseLaunchAllArgs(['mycube', ...flag, '--only', 'builder', '--dry-run'])).toEqual({
+        ok: true,
+        args: { cubeName: 'mycube', flags: { cli, only: 'builder', dryRun: true } },
+      });
+    }
+  });
+  it.each([['--cli'], ['--cli='], ['--cli', '--force'], ['--cli', 'invalid'], ['--cli=$(touch /tmp/no)']])('rejects invalid or missing CLI values: %j', (...args) => {
+    expect(parseLaunchAllArgs(args)).toEqual({ ok: false, error: '--cli requires claude, codex, or opencode' });
   });
   it('--no-attach → noAttach true', () => {
     expect(parseLaunchAllArgs(['--no-attach'])).toMatchObject({ ok: true, args: { flags: { noAttach: true } } });

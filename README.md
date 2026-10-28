@@ -29,6 +29,10 @@ drone. Borg has no hosted account or subscription.
   repository you are already in. Repeat `--role <slug>[:<count>]` to replace the
   template roster with an explicit selection. Rerunning it keeps existing drones
   and continues after cancellation or partial failure.
+- `borg launch-all --cli opencode` reopens saved drone worktrees using OpenCode.
+  Choose `claude` or `codex` instead, or omit `--cli` to use each worktree's saved
+  choice. The explicit choice is remembered in each launched worktree. See
+  [Batch startup](docs/BATCH_STARTUP.md) for terminal routing and preview options.
 - `borg assimilate [role]` adds or resumes one drone under one role. Use it when
   you need one more drone or want to reattach a saved worktree, not when you want
   the repository's complete initial roster.

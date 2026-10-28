@@ -1,6 +1,7 @@
 // gh#556 Part 2 — the per-drone shell command + borg-binary resolution (spec §5).
 
 import { shellEscape } from './shell-escape.js';
+import type { BorgCli } from './cubes.js';
 
 /**
  * The borg binary that invoked launch-all (spec §5.1). `process.argv[1]` is the
@@ -23,11 +24,12 @@ export function resolveBorgPath(): string {
 export function buildLaunchCommand(
   candidate: { worktreeDir: string; droneId: string },
   borgPath: string,
-  opts: { keepOpenOnFail?: boolean } = {}
+  opts: { keepOpenOnFail?: boolean; cli?: BorgCli } = {}
 ): string {
   const base =
     `cd ${shellEscape(candidate.worktreeDir)} && ` +
-    `${shellEscape(borgPath)} launch ${shellEscape(candidate.droneId)}`;
+    `${shellEscape(borgPath)} launch ${shellEscape(candidate.droneId)}` +
+    (opts.cli ? ` --cli ${shellEscape(opts.cli)}` : '');
   if (opts.keepOpenOnFail) {
     return `${base} || { echo "borg launch failed — press Enter to close"; read _; }`;
   }

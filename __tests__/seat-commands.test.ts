@@ -119,6 +119,20 @@ describe('seat command parsers', () => {
     expect(parseLaunchSeatArgs(['builder-aaaaaaaa', '--cube'])).toEqual({ ok: false, error: '--cube requires a cube name' });
     expect(parseLaunchSeatArgs(['one', 'two'])).toEqual({ ok: false, error: 'accepts exactly one drone label or id prefix' });
   });
+
+  it.each(['claude', 'codex', 'opencode'])('parses --cli %s together with the target and cube', (cli) => {
+    for (const flag of [['--cli', cli], [`--cli=${cli}`]]) {
+      expect(parseLaunchSeatArgs([...flag, DRONE_A, '--cube', 'alpha'])).toEqual({
+        ok: true, target: DRONE_A, cube: 'alpha', cli,
+      });
+    }
+  });
+
+  it.each([['--cli'], ['--cli='], ['--cli', '--cube'], ['--cli', 'invalid']])('rejects invalid or missing launch CLI values: %j', (...args) => {
+    expect(parseLaunchSeatArgs([DRONE_A, ...args])).toEqual({
+      ok: false, error: '--cli requires claude, codex, or opencode',
+    });
+  });
 });
 
 describe('launch-seat identity handoff', () => {
@@ -380,6 +394,24 @@ describe('production local-registry wiring', () => {
 });
 
 describe('borg launch', () => {
+  it('passes an explicit CLI through the canonical worktree and expected drone identity', async () => {
+    const cube = activeCube({ worktree: '/linked/a' });
+    const { deps, launchBareBorg } = depsFor([cube]);
+
+    expect(await runLaunchSeat({ target: DRONE_A, cli: 'opencode' }, deps)).toBe(0);
+    expect(launchBareBorg).toHaveBeenCalledWith('/real/a', expect.objectContaining({
+      cubeId: CUBE_A, droneId: DRONE_A, worktree: '/real/a', droneLabel: cube.droneLabel,
+    }), 'opencode');
+  });
+
+  it('an explicit CLI cannot bypass a changed worktree identity', async () => {
+    const cube = activeCube();
+    const { deps, launchBareBorg } = depsFor([cube], {
+      getActiveSeatForWorktree: vi.fn(async () => activeSeat(activeCube({ droneId: DRONE_B })).record),
+    });
+    expect(await runLaunchSeat({ target: DRONE_A, cli: 'opencode' }, deps)).toBe(1);
+    expect(launchBareBorg).not.toHaveBeenCalled();
+  });
   it('launches an unambiguous label by running bare borg in the canonical worktree', async () => {
     const cube = activeCube({ worktree: '/linked/a' });
     const { deps, launchBareBorg } = depsFor([cube]);

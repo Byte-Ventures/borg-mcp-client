@@ -1,3 +1,4 @@
+import type { BorgCli } from './cubes.js';
 /**
  * The borg binary that invoked launch-all (spec §5.1). `process.argv[1]` is the
  * absolute path to the running borg script — deterministic, independent of $PATH
@@ -18,5 +19,6 @@ export declare function buildLaunchCommand(candidate: {
     droneId: string;
 }, borgPath: string, opts?: {
     keepOpenOnFail?: boolean;
+    cli?: BorgCli;
 }): string;
 //# sourceMappingURL=launch-all-command.d.ts.map
