@@ -10,6 +10,7 @@ import {
   type OpenCodeConnectionState,
 } from './opencode-drone.js';
 import type { AgentKind } from './agent-runtime.js';
+import { getOpenCodeV2ConnectionState, resolveOpenCodeV2SessionID } from './opencode-v2-runtime.js';
 
 export interface WakePathSnapshot {
   agentKind: AgentKind;
@@ -92,7 +93,8 @@ export async function inspectWakePath(
     };
   }
 
-  const getState = deps.getOpenCodeState ?? getOpenCodeConnectionState;
+  if (!deps.getOpenCodeState && getOpenCodeV2ConnectionState()) await resolveOpenCodeV2SessionID();
+  const getState = deps.getOpenCodeState ?? (() => getOpenCodeV2ConnectionState() ?? getOpenCodeConnectionState());
   const openCode = getState();
   return {
     agentKind: inputs.agentKind,

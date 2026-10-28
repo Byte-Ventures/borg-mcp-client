@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, delimiter } from 'node:path';
 import fs from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -10,8 +10,10 @@ import {
   renderOpenCodeStartupDiagnostics,
   runDoctor,
   warnIfAgentIntegrationUnhealthy,
+  refreshAndVerifyManagedAgentIntegrations,
 } from '../src/agent-integration-health';
 import { buildBorgPluginSource } from '../src/opencode-plugin';
+import { getPackageVersion } from '../src/version';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -44,6 +46,23 @@ function configureOpenCode(home: string): void {
 }
 
 describe('agent integration health', () => {
+  it('repairs OpenCode integration without recreating a shared autoload plugin', () => {
+    const version = getPackageVersion();
+    const f = packageFixture(version);
+    const home = join(f.root, 'home');
+    configureOpenCode(home);
+    const plugin = join(home, '.config', 'opencode', 'plugins', 'borg-orient.js');
+    mkdirSync(join(plugin, '..'), { recursive: true });
+    writeFileSync(plugin, buildBorgPluginSource(version));
+    vi.stubEnv('BORG_STATE_ROOT', home); vi.stubEnv('PATH', f.bin + delimiter + process.env.PATH);
+    try {
+      refreshAndVerifyManagedAgentIntegrations();
+      expect(fs.existsSync(plugin)).toBe(false);
+      expect(inspectAgentIntegrationHealth().openCodePlugin.detail).toContain('launch-scoped V1/V2');
+      refreshAndVerifyManagedAgentIntegrations();
+      expect(fs.existsSync(plugin)).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
+  });
   it('accepts only bins owned by the running borgmcp version and inventories the OpenCode plugin', () => {
     const f = packageFixture();
     const plugin = join(f.root, 'home', '.config', 'opencode', 'plugins', 'borg-orient.js');

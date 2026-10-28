@@ -60,6 +60,22 @@ describe('OpenCode production launch wiring', () => {
     expect(connect).toHaveBeenCalledWith(expect.objectContaining({ serverUrl: 'http://127.0.0.1:15555' }));
   });
 
+  it('preserves a complete user inline MCP entry on the installed V1 launch path', async () => {
+    const child = new EventEmitter() as any;
+    const entry = { type: 'local', command: ['user-borg'], environment: { CUSTOM: 'value' } };
+    const kickoff = createOpenCodeLaunchKickoff('kickoff');
+    const launched = await launchOpenCodeProcess({ cwd: process.cwd(), port: 15555, prompt: kickoff.prompt,
+      passthroughArgs: [], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: 'local/model', mcp: { borg: entry }, plugin: ['user-plugin'] }) },
+      droneLabel: 'drone', cubeName: 'cube', kickoff,
+      installation: { executable: '/native/opencode', major: 1 } as any,
+      spawnProcess: (() => child) as any, connect: async () => {}, injectKickoff: async () => true });
+    const content = JSON.parse(launched.launchEnv.OPENCODE_CONFIG_CONTENT!);
+    expect(content.mcp.borg).toEqual(entry); expect(content.model).toBe('local/model');
+    expect(content.plugin[0]).toBe('user-plugin'); expect(content.plugin).toHaveLength(2);
+    child.emit('exit', 3, null);
+    expect(await launched.completion).toEqual({ kind: 'exit', code: 3, signal: null });
+  });
+
   it('keeps independent API and correlation secrets out of argv and prompt text', async () => {
     const apiPassword = Buffer.alloc(32, 0x41).toString('base64url');
     const correlationIdentity = Buffer.alloc(32, 0x42).toString('base64url');

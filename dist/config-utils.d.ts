@@ -5,6 +5,7 @@
  */
 import type { LaunchAccessPaths } from './launch-access.js';
 import { type BorgCli } from './cubes.js';
+export declare function parseJsonc(text: string): unknown;
 /**
  * Register a Claude Code SessionStart hook that runs `borg-regen` at the
  * start of every session. Idempotent: re-running won't add duplicates.

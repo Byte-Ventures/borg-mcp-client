@@ -11,6 +11,8 @@
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { OPENCODE_V2_DESCRIPTOR_ENV } from './opencode-v2-broker.js';
+import { connectOpenCodeV2Runtime, injectOpenCodeV2Entry, settleOpenCodeV2Entry, notifyOpenCodeV2LogPersisted } from './opencode-v2-runtime.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
@@ -162,7 +164,6 @@ import {
   openCodeLaunchBinding,
   writeOpenCodeStartupDiagnostic,
 } from './opencode-drone.js';
-import { installBorgPlugin } from './opencode-plugin.js';
 import { openCodeApiPasswordFromEnv, openCodeLaunchCorrelationFromEnv } from './opencode-launch-trust.js';
 import { setModuleInjectOpenCode } from './log-stream.js';
 import {
@@ -285,6 +286,8 @@ export function formatPatchedRoleSectionResult(action: 'replace' | 'insert' | 'd
 
 export async function connectOpenCodeRuntime(
   active: {
+    cubeId?: string;
+    droneId?: string;
     worktree?: string;
     droneLabel: string;
     name: string;
@@ -294,6 +297,10 @@ export async function connectOpenCodeRuntime(
     connect?: typeof connectOpenCodeDrone;
   } = {},
 ): Promise<boolean> {
+  if (env[OPENCODE_V2_DESCRIPTOR_ENV]) {
+    if (!active.cubeId || !active.droneId) return false;
+    return connectOpenCodeV2Runtime({ worktree: active.worktree ?? findProjectRoot(), cubeId: active.cubeId, droneId: active.droneId }, env);
+  }
   const configuredPort = configuredOpenCodePort(env);
   if (configuredPort === null) {
     console.error(OPEN_CODE_PORT_MISSING_DIAGNOSTIC);
@@ -357,14 +364,15 @@ export async function main() {
     },
 
   // gh#opencode: initialize opencode drone module for autonomous entry
-  // injection. Installs the plugin (idempotent) and connects the SDK client
+  // injection. The launcher owns plugin installation and selects its version;
+  // an MCP child must never write a V1 file into V2's shared autoload directory.
+  // Connect the session transport
   // when the runtime is opencode (BORG_OPENCODE=1). The module-level
   // injectOpenCode hook routes SSE entries into the TUI's session.
-  // Best-effort; never breaks the MCP server.
+  // V1 connects best-effort here. V2 binds inside the identity gate below.
     openCode: async () => {
-      installBorgPlugin();
       const active = await getActiveCube();
-      if (active && openCodeRuntime) {
+      if (active && openCodeRuntime && !process.env[OPENCODE_V2_DESCRIPTOR_ENV]) {
         if (await connectOpenCodeRuntime(active)) {
           setModuleInjectOpenCode(injectOpenCodeEntry, settleOpenCodeEntry);
         }
@@ -427,7 +435,8 @@ export async function main() {
   // (old cubes.json / pre-assimilate) → full set; deferred tools stay reachable
   // via borg_tool. Never an auth boundary — live per-client cube grants govern.
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    await waitForOpenCodeIdentity();
+    const failure = await waitForOpenCodeIdentity();
+    if (failure) return { tools: [] };
     let scope: { roleName?: string; roleClass?: 'queen' | 'worker'; isHumanSeat?: boolean } | null = null;
     try {
       const active = await getActiveCube();
@@ -1115,6 +1124,7 @@ export async function main() {
             serverTrustIdentity: active.serverTrustIdentity,
           };
           const result = await appendLog(active.sessionToken, active.apiUrl, finalMessage, appendOpts);
+          await notifyOpenCodeV2LogPersisted(request.params._meta?.['ai.opencode/sessionID']);
           await recordLifecycleLog(active, finalMessage, agentSession);
           if (lifecycleSignal === 'arrival') markArrivalAnnouncedThisProcess();
           let recipientDrones: any[] = [];
@@ -1714,7 +1724,20 @@ export async function main() {
         getActiveCubeForWorktree,
         pinSeatIdentity: pinMcpSeatIdentity,
         childCwd: process.cwd(),
+      }).then(async (active) => {
+        if (!finishOpenCodeIdentity) return;
+        if (process.env[OPENCODE_V2_DESCRIPTOR_ENV]) {
+          try {
+            if (!await connectOpenCodeRuntime(active)) throw new Error('Binding refused');
+          } catch {
+            throw new OpenCodeSeatIdentityError('LAUNCH_BINDING_INVALID',
+              'OpenCode 2 launch could not be bound to this drone. Relaunch through borg.');
+          }
+          if (!finishOpenCodeIdentity) return;
+          setModuleInjectOpenCode(injectOpenCodeV2Entry, settleOpenCodeV2Entry);
+        }
       }).catch((error) => {
+        if (!finishOpenCodeIdentity) return;
         openCodeIdentityFailure = error instanceof OpenCodeSeatIdentityError
           ? error
           : new OpenCodeSeatIdentityError('ROOTS_UNAVAILABLE', String(error));

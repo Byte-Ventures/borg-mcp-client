@@ -99,13 +99,20 @@ export function treeChanges(before: TreeSnapshot, after: TreeSnapshot, live: Reg
 }
 
 /** Occurrences of each marker in names and file contents under `directory` (never follows links). */
-export function scanForMarkers(directory: string, markers = TEST_MARKERS): Record<string, number> {
+export function scanForMarkers(directory: string, markers = TEST_MARKERS, readFile: (filename: string) => Buffer = readFileSync): Record<string, number> {
   const counts: Record<string, number> = Object.fromEntries(markers.map((marker) => [marker, 0]));
   const needles = markers.map((marker) => [marker, Buffer.from(marker)] as const);
   for (const [path, entry] of snapshotTree(directory)) {
     for (const [marker] of needles) if (path.includes(marker)) counts[marker] += 1;
     if (entry.type !== 'file') continue;
-    const data = readFileSync(join(directory, path));
+    let data: Buffer;
+    try { data = readFile(join(directory, path)); }
+    catch (error) {
+      // An active stream lease can disappear after the snapshot. Keep all
+      // other errors actionable, and still scan every remaining live file.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && isLive(path, LIVE_WRITERS)) continue;
+      throw error;
+    }
     for (const [marker, needle] of needles) {
       for (let at = data.indexOf(needle); at >= 0; at = data.indexOf(needle, at + 1)) counts[marker] += 1;
     }
@@ -121,7 +128,9 @@ export default function setup(): () => void {
   const protectedConfig = process.env.BORG_TEST_GUARD_PROTECTED_CONFIG ?? realBorgConfig();
   const before = snapshotTree(protectedConfig);
   const markers = scanForMarkers(protectedConfig);
+  const ciFleet = process.env.CI === 'true' && process.env.BORG_E2E === '1';
   for (const key of Object.keys(process.env)) if (key.startsWith('BORG_')) delete process.env[key];
+  if (ciFleet) process.env.BORG_E2E = '1';
   const realHome = realpathSync(userInfo().homedir);
   const temporary = realpathSync(tmpdir());
   // The run's own roots may lie inside the real home only in the cube's scratch area.
@@ -133,6 +142,7 @@ export default function setup(): () => void {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'borg-test-run-home-')));
   process.env[TEST_ALLOWED_ROOTS_ENV] = [temporary, home].join(delimiter);
   process.env.HOME = home;
+  if (process.platform === 'win32') process.env.USERPROFILE = home;
   process.env.XDG_CONFIG_HOME = join(home, '.config');
   return () => {
     rmSync(home, { recursive: true, force: true });

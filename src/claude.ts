@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { captureChildCompletion, type ChildCompletion } from './child-completion.js';
 /**
  * Borg CLI launcher
  *
@@ -111,6 +112,12 @@ import { isClientOwnedCubeInitArgv, runEarlyServerFacade } from './server-facade
 import { runEarlyUpdate } from './update-cmd.js';
 import { runDoctor, warnIfAgentIntegrationUnhealthy } from './agent-integration-health.js';
 import { scratchRootForSeat } from './launch-access.js';
+import { inspectOpenCodeInstallation, type OpenCodeInstallation } from './opencode-installation.js';
+import { launchOpenCodeV2Process } from './opencode-v2-launch.js';
+import { installLaunchOpenCodePlugin, migrateLegacyOpenCodePlugin } from './opencode-launch-plugin.js';
+import { fs } from './guarded-fs.js';
+import { borgHomeRoot } from './private-root.js';
+import { parseJsonc } from './config-utils.js';
 
 export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
 
@@ -154,10 +161,12 @@ export async function launchOpenCodeProcess(options: {
   connect?: typeof connectOpenCodeDrone;
   injectKickoff?: typeof injectInitialKickoff;
   allocatePort?: typeof allocateOpenCodePort;
+  installation?: OpenCodeInstallation;
 }): Promise<{
   launchArgs: string[];
   launchEnv: NodeJS.ProcessEnv;
   process: ReturnType<typeof spawn>;
+  completion: Promise<ChildCompletion>;
 }> {
   let port = options.port;
   let lastExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
@@ -168,29 +177,30 @@ export async function launchOpenCodeProcess(options: {
       ? options.kickoff
       : createOpenCodeLaunchKickoff(options.prompt);
     const plan = createOpenCodeLaunchPlan(options.cwd, port, options.prompt, options.passthroughArgs);
+    const launchPlugin = options.installation ? (() => {
+      migrateLegacyOpenCodePlugin();
+      return installLaunchOpenCodePlugin(1, attemptKickoff.correlationIdentity);
+    })() : null;
+    const overlay: any = options.env.OPENCODE_CONFIG_CONTENT ? parseJsonc(options.env.OPENCODE_CONFIG_CONTENT) : {};
     const launchEnv = {
       ...options.env,
       BORG_OPENCODE_PORT: plan.envPort,
       [OPENCODE_SERVER_USERNAME_ENV]: OPENCODE_SERVER_USERNAME,
       [OPENCODE_SERVER_PASSWORD_ENV]: attemptKickoff.apiPassword,
       [BORG_OPENCODE_LAUNCH_CORRELATION_ENV]: attemptKickoff.correlationIdentity,
+      ...(launchPlugin ? { BORG_OPENCODE_PLUGIN_MODE: 'launch',
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...overlay, plugin: [...(overlay.plugin ?? []), launchPlugin.entrypoint] }) } : {}),
     };
-    const child = (options.spawnProcess ?? spawn)('opencode', plan.launchArgs, {
+    const child = (options.spawnProcess ?? spawn)(options.installation?.executable ?? 'opencode', plan.launchArgs, {
       stdio: 'inherit',
       shell: false,
       env: launchEnv,
     });
-    type Stopped =
-      | { kind: 'error'; error: NodeJS.ErrnoException }
-      | { kind: 'exit'; code: number | null; signal: NodeJS.Signals | null };
-    let markStopped: (outcome: Stopped) => void;
-    const stopped = new Promise<Stopped>((resolve) => { markStopped = resolve; });
-    const onError = (error: NodeJS.ErrnoException) => markStopped({ kind: 'error', error });
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      markStopped({ kind: 'exit', code, signal });
-    };
-    child.once('error', onError);
-    child.once('exit', onExit);
+    const stopped = captureChildCompletion(child);
+    const cleanPlugin = () => { if (launchPlugin) fs.rmSync(launchPlugin.directory, { recursive: true, force: true }); };
+    child.once('close', cleanPlugin);
+    child.once('exit', cleanPlugin);
+    child.once('error', cleanPlugin);
     await (options.connect ?? connectOpenCodeDrone)({
       serverUrl: plan.serverUrl,
       apiPassword: attemptKickoff.apiPassword,
@@ -205,10 +215,8 @@ export async function launchOpenCodeProcess(options: {
       ),
       stopped,
     ]);
-    child.off('error', onError);
-    child.off('exit', onExit);
     if (outcome.kind === 'ready') {
-      return { launchArgs: plan.launchArgs, launchEnv, process: child };
+      return { launchArgs: plan.launchArgs, launchEnv, process: child, completion: stopped };
     }
     if (outcome.kind === 'unbound') {
       child.kill();
@@ -583,11 +591,18 @@ async function main() {
 
   // Configure only the CLI that will actually launch. This must follow the
   // one-shot menu: the resolved default can differ from the menu selection.
+  let openCodeInstallation: OpenCodeInstallation | undefined;
   cli = configureSelectedLaunchCli(
     cli,
     launchAction,
     (selectedCli) => {
-      ensureResolvedCliConfigured(selectedCli, active);
+      if (selectedCli === 'opencode') {
+        openCodeInstallation = inspectOpenCodeInstallation();
+        // V2 uses a native launch-only overlay. Legacy mcp add/debug config
+        // would write project config or start the user's shared V2 service.
+        if (openCodeInstallation.major === 2) return;
+      }
+      ensureResolvedCliConfigured(selectedCli, active, selectedCli === 'opencode');
       if (selectedCli === 'opencode' && active) {
         const worktree = findProjectRoot(process.cwd());
         provisionLaunchAccess(selectedCli, worktree, {
@@ -617,7 +632,7 @@ async function main() {
   const approvalCwd = cli === 'codex'
     ? resolveCodexLaunchCwd(parsedCli.rest, process.cwd())
     : process.cwd();
-  const launchApproval = await resolveLaunchBorgApprovals(
+  const launchApproval = openCodeInstallation?.major === 2 ? { codexArgs: [] } : await resolveLaunchBorgApprovals(
     cli,
     defaultApprovalIo(prompt, () => process.stdin.isTTY === true, {
       cwd: approvalCwd,
@@ -681,10 +696,12 @@ async function main() {
   // Codex remote-wake transport. In particular, clear a stale Codex marker
   // before a Codex -> Claude relaunch can reach its MCP child.
   let launchEnv: NodeJS.ProcessEnv = { ...withAgentRuntimeEnv(process.env, cli), BORG_SESSION: '1' };
+  if (cli === 'opencode' && active) launchEnv.BORG_LAUNCH_SCRATCH = scratchRootForSeat(borgHomeRoot(), active.droneLabel, active.droneId);
   if (cli === 'opencode' && launchApproval.openCodePermission) {
     launchEnv.OPENCODE_PERMISSION = launchApproval.openCodePermission;
   }
   let codexServerCleanup: (() => void) | null = null;
+  let openCodeCleanup: (() => Promise<void>) | null = null;
   let codexRemote: Awaited<ReturnType<typeof prepareCodexRemoteLaunch>> | null = null;
   if (cli === 'codex') {
     if (passthroughArgs.some((arg) => arg === '--remote' || arg.startsWith('--remote='))) {
@@ -738,8 +755,7 @@ async function main() {
     // (auto-submits it as the first message). BORG_SESSION is pinned in
     // opencode.json. Wake delivery uses HTTP entry injection through OpenCode's local HTTP API;
     // the OS-selected port avoids a deterministic collision space.
-    openCodePort = await allocateOpenCodePort();
-    installBorgPlugin();
+    openCodePort = openCodeInstallation?.major === 2 ? 0 : await allocateOpenCodePort();
     openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
     launchArgs = [];
   } else {
@@ -751,8 +767,14 @@ async function main() {
   const cliDisplayName = cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex' : 'OpenCode';
   console.error(`${consolePrefix()}${chalk.blue(`◼ Launching ${cliDisplayName}…`)}`);
 
-  const agentProcess = cli === 'opencode' && openCodeKickoff && openCodePort !== undefined
-    ? (await launchOpenCodeProcess({
+  const v2Launch = cli === 'opencode' && openCodeInstallation?.major === 2
+    ? await launchOpenCodeV2Process({ installation: openCodeInstallation, cwd: process.cwd(),
+        env: launchEnv, prompt: kickoff, passthroughArgs, skipApprovalOverride: parsedCli.noBorgApprovalOverride,
+        ...(active ? { seat: { worktree: active.worktree ?? findProjectRoot(), cubeId: active.cubeId, droneId: active.droneId } } : {}) })
+    : null;
+  if (v2Launch) openCodeCleanup = v2Launch.cleanup;
+  const v1Launch = cli === 'opencode' && !v2Launch && openCodeKickoff && openCodePort !== undefined
+    ? await launchOpenCodeProcess({
         cwd: process.cwd(),
         port: openCodePort,
         prompt: openCodeKickoff.prompt,
@@ -761,10 +783,13 @@ async function main() {
         droneLabel: active?.droneLabel ?? 'opencode',
         cubeName: active?.name ?? 'borg',
         kickoff: openCodeKickoff,
-      })).process
-    : spawn(cli, launchArgs, { stdio: 'inherit', shell: false, env: launchEnv });
-
-  agentProcess.on('error', (err: NodeJS.ErrnoException) => {
+        installation: openCodeInstallation,
+      }) : null;
+  const agentProcess = v2Launch?.process ?? v1Launch?.process ?? spawn(cli, launchArgs, { stdio: 'inherit', shell: false, env: launchEnv });
+  const completion = v2Launch?.completion ?? v1Launch?.completion ?? captureChildCompletion(agentProcess);
+  const outcome = await completion;
+  if (outcome.kind === 'error') {
+    const err = outcome.error as NodeJS.ErrnoException;
     if (codexServerCleanup) {
       try {
         codexServerCleanup();
@@ -780,21 +805,20 @@ async function main() {
       console.error(`${consolePrefix()}${chalk.red(`\n◼ Failed to launch ${cli}: ${err.message}\n`)}`);
     }
     process.exit(1);
-  });
+  }
 
-  agentProcess.on('exit', (code) => {
-    if (codexServerCleanup) {
-      try {
-        codexServerCleanup();
-      } catch {
-        // best-effort
-      }
+  await openCodeCleanup?.();
+  if (codexServerCleanup) {
+    try {
+      codexServerCleanup();
+    } catch {
+      // best-effort
     }
-    process.exit(code ?? 0);
-  });
+  }
+  process.exit(outcome.code ?? 0);
 }
 
-export function ensureResolvedCliConfigured(cli: BorgCli, active: ActiveCube | null = null): void {
+export function ensureResolvedCliConfigured(cli: BorgCli, active: ActiveCube | null = null, launchScopedOpenCode = false): void {
   const label = cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex' : 'OpenCode';
   const targetedOpenCodeLaunch = cli === 'opencode' &&
     Boolean(process.env[BORG_LAUNCH_EXPECTED_SEAT_ENV]);
@@ -824,12 +848,13 @@ export function ensureResolvedCliConfigured(cli: BorgCli, active: ActiveCube | n
       addClaudeUserPromptSubmitHook: addUserPromptSubmitHook,
       addCodexSessionStartHook,
       addCodexUserPromptSubmitHook,
-      installOpenCodePlugin: installBorgPlugin,
+      installOpenCodePlugin: launchScopedOpenCode ? () => {} : installBorgPlugin,
     });
   } catch (err: any) {
     if (err instanceof OpenCodeTargetedLaunchConfigError) throw err;
     console.error(`${consolePrefix()}${chalk.yellow(`warning: ${label} integration check failed: ${err?.message ?? err}`)}`);
   }
+  if (cli === 'opencode' && launchScopedOpenCode) return;
   try {
     warnIfAgentIntegrationUnhealthy({
       stderr: (text) => console.error(`${consolePrefix()}${chalk.yellow(text.trimEnd())}`),

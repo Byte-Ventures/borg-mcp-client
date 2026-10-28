@@ -178,8 +178,9 @@ For Claude Code and Codex, `BORG_DISABLE_LAUNCH_REMINDER` is a presence-based
 local opt-out for launch orientation messaging; setting it does not activate
 Borg tools or change server authorization. OpenCode has no plain-launch reminder;
 inside a Borg-launched process, its orientation plugin supplies the Borg
-orientation once after OpenCode creates a new session and preserves it across
-compaction.
+orientation after OpenCode creates a new session and preserves it across
+compaction. OpenCode 1 and 2.1.2+ use separate launch-scoped plugins; V2 keeps
+native Code Mode and uses a private server per drone. See [OpenCode integration](OPENCODE.md).
 
 Each assimilated seat also receives a disposable scratch root at
 `~/.borg/scratch/<seat>/`. Borg pre-authorizes the launched worktree and that
@@ -188,7 +189,8 @@ Git common directory when it is outside the worktree; ordinary checkouts do not
 receive that redundant nested grant, and the origin checkout is never granted.
 Claude Code uses the worktree's
 `.claude/settings.local.json`, OpenCode uses the worktree's
-`.opencode/opencode.json`, and Codex receives native `--add-dir` flags at
+`.opencode/opencode.json` with V1 and launch-scoped session permissions with V2,
+and Codex receives native `--add-dir` flags at
 launch. Use the scratch root for detached review checkouts, unpacked artifacts,
 and fake-home directories; nothing durable belongs there. Claude Code and Codex
 may also print a non-blocking reminder when a tool targets a path outside those

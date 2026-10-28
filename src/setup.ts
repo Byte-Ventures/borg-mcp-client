@@ -13,6 +13,8 @@
 import prompts from 'prompts';
 import chalk from 'chalk';
 import which from 'which';
+import { inspectOpenCodeInstallation } from './opencode-installation.js';
+import { registerCommonOpenCodeMcp } from './opencode-common-config.js';
 import {
   confirmConfigMutation,
   configMutationTargets,
@@ -157,6 +159,7 @@ async function main() {
   const claudeSelected = selected.has('claude');
   const codexSelected = selected.has('codex');
   const opencodeSelected = selected.has('opencode');
+  const openCodeV2 = opencodeSelected && inspectOpenCodeInstallation().major === 2;
   const claudeHookPending = claudeSelected && (claudeLegacyHookPending || claudeUpsHookPending);
   const codexHookPending = codexSelected && (codexSessionHookPending || codexUpsHookPending);
 
@@ -233,7 +236,8 @@ async function main() {
   }
   if (opencodeSelected) {
     try {
-      ensureCliMcpConfigured('opencode');
+      if (openCodeV2) registerCommonOpenCodeMcp();
+      else ensureCliMcpConfigured('opencode');
       console.log(chalk.green('◼ borg configured for OpenCode'));
     } catch (error: any) {
       console.error(chalk.red(`\n◼ Failed to configure OpenCode: ${error.message}\n`));
@@ -247,7 +251,7 @@ async function main() {
   });
   for (const warning of await setupApprovalWarnings(approvalIo, {
     codex: codexSelected,
-    opencode: opencodeSelected,
+    opencode: opencodeSelected && !openCodeV2,
   })) {
     console.log(chalk.yellow(`warning: ${warning}`));
   }

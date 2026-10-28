@@ -1,6 +1,7 @@
 import { probeCodexBridgeArmed, getCodexDeliveryState, codexWakePathHealthy, } from './codex-app-wake.js';
 import { checkInboxMonitorHealthy } from './stream-status.js';
 import { getOpenCodeConnectionState, } from './opencode-drone.js';
+import { getOpenCodeV2ConnectionState, resolveOpenCodeV2SessionID } from './opencode-v2-runtime.js';
 export function openCodeWakePathHealthy(state) {
     if (!state.connected)
         return false;
@@ -48,7 +49,9 @@ export async function inspectWakePath(inputs, deps = {}) {
             codex,
         };
     }
-    const getState = deps.getOpenCodeState ?? getOpenCodeConnectionState;
+    if (!deps.getOpenCodeState && getOpenCodeV2ConnectionState())
+        await resolveOpenCodeV2SessionID();
+    const getState = deps.getOpenCodeState ?? (() => getOpenCodeV2ConnectionState() ?? getOpenCodeConnectionState());
     const openCode = getState();
     return {
         agentKind: inputs.agentKind,

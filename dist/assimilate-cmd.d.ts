@@ -86,6 +86,19 @@ export interface AssimilateDeps {
     mkdirp: (dir: string) => void;
     preparePrivateRoot: () => Promise<void>;
     exec: (cmd: string, args: string[], cwd: string, env?: Record<string, string>) => Promise<number>;
+    /** Production launch boundary; tests may keep the legacy exec seam. */
+    launchOpenCode?: (options: {
+        cwd: string;
+        env: NodeJS.ProcessEnv;
+        prompt: string;
+        seat: {
+            worktree: string;
+            cubeId: string;
+            droneId: string;
+        };
+        skipApprovalOverride?: boolean;
+    }) => Promise<number>;
+    ensureMcpConfigured?: (cli: BorgCli) => void;
     stderr: (line: string) => void;
     stdout: (line: string) => void;
     prompt: (message: string) => Promise<string>;
@@ -250,7 +263,7 @@ export interface FinalizationInput {
     rollbackWorktree: () => void;
 }
 export declare function finalizeAssimilationSeat(input: FinalizationInput, deps: FinalizationDeps): Promise<AssimilationPhaseOutcome<void>>;
-export type LaunchDeps = Pick<AssimilateDeps, 'exec' | 'getInboxPath' | 'isTTY' | 'prepareCodexRemoteLaunch' | 'probeMcpReady' | 'resolveCliApprovals' | 'setTerminalTitle' | 'stderr' | 'stdout'>;
+export type LaunchDeps = Pick<AssimilateDeps, 'exec' | 'launchOpenCode' | 'getInboxPath' | 'isTTY' | 'prepareCodexRemoteLaunch' | 'probeMcpReady' | 'resolveCliApprovals' | 'setTerminalTitle' | 'stderr' | 'stdout'>;
 export interface LaunchInput {
     flags: AssimilateFlags;
     result: AssimilateResult;
@@ -268,7 +281,7 @@ export interface LaunchInput {
     originalCwd: string;
 }
 export declare function launchAssimilatedAgent(input: LaunchInput, deps: LaunchDeps): Promise<number>;
-export type CubeRoleResolutionDeps = Pick<AssimilateDeps, 'resolveCli' | 'stderr'>;
+export type CubeRoleResolutionDeps = Pick<AssimilateDeps, 'resolveCli' | 'stderr' | 'ensureMcpConfigured'>;
 export interface CubeRoleResolutionInput {
     requestedRole: string | undefined;
     flags: AssimilateFlags;

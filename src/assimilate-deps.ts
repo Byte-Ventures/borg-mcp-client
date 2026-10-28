@@ -81,6 +81,12 @@ import {
 } from './repository-identity.js';
 import { PromptInterruptedError } from './repository-cube-init.js';
 import { borgHomeRoot } from './private-root.js';
+import { inspectOpenCodeInstallation } from './opencode-installation.js';
+import { launchOpenCodeV2Process } from './opencode-v2-launch.js';
+import { launchOpenCodeProcess } from './claude.js';
+import { allocateOpenCodePort, createOpenCodeLaunchKickoff } from './opencode-drone.js';
+import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
+import { registerCommonOpenCodeMcp } from './opencode-common-config.js';
 
 /**
  * Wraps the readline question operation with the production interruption
@@ -133,6 +139,23 @@ export function buildDefaultAssimilateDeps(
     homedir: () => borgHomeRoot(),
     mkdirp: (dir) => mkdirSync(dir, { recursive: true }),
     preparePrivateRoot: () => ensurePrivateBorgConfigRoot(),
+    ensureMcpConfigured: (cli) => {
+      if (cli === 'opencode' && inspectOpenCodeInstallation().major === 2) registerCommonOpenCodeMcp();
+      else ensureCliMcpConfigured(cli);
+    },
+    launchOpenCode: async (options) => {
+      const installation = inspectOpenCodeInstallation(options.env);
+      const launch = installation.major === 2
+        ? await launchOpenCodeV2Process({ ...options, installation })
+        : await launchOpenCodeProcess({ cwd: options.cwd, env: options.env, prompt: options.prompt,
+            port: await allocateOpenCodePort(), passthroughArgs: [], installation,
+            droneLabel: (await cubesGetActive())?.droneLabel ?? 'opencode', cubeName: (await cubesGetActive())?.name ?? 'borg',
+            kickoff: createOpenCodeLaunchKickoff(options.prompt) });
+      const outcome = await launch.completion;
+      if ('cleanup' in launch) await launch.cleanup();
+      if (outcome.kind === 'error') throw outcome.error;
+      return outcome.code ?? 0;
+    },
     exec: (cmd, args, cwd, env) =>
       new Promise<number>((resolveExit, rejectExit) => {
         // assimilate-cmd builds the complete child env before calling exec. Use
@@ -164,7 +187,8 @@ export function buildDefaultAssimilateDeps(
         buildDefaultFirstRunServerInstallDeps(),
         connectCommand,
       )).kind,
-    resolveCliApprovals: (cli, cwd, options) => resolveLaunchBorgApprovals(
+    resolveCliApprovals: (cli, cwd, options) => cli === 'opencode' && inspectOpenCodeInstallation().major === 2
+      ? Promise.resolve({ codexArgs: [] }) : resolveLaunchBorgApprovals(
       cli,
       defaultApprovalIo(
         async (message) => {
@@ -240,7 +264,10 @@ export function buildDefaultAssimilateDeps(
     installProjectSessionHook: (projectRoot) => {
       addProjectSessionStartHook(projectRoot);
     },
-    provisionLaunchAccess,
+    provisionLaunchAccess: (cli, projectRoot, paths) => {
+      if (cli === 'opencode' && inspectOpenCodeInstallation().major === 2) return;
+      provisionLaunchAccess(cli, projectRoot, paths);
+    },
 
     // #1015: discovery is advisory but still verifies the server-owned CA.
     detectLocalServer: async () =>

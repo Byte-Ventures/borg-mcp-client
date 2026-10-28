@@ -291,6 +291,19 @@ describe('the tree comparison', () => {
     }
   });
 
+  it('tolerates a vanished live lease while keeping other disappeared files actionable', () => {
+    const dir = fakeConfig();
+    try {
+      const lease = join(dir, 'stream-locks', 'cube', 'owner.json');
+      expect(() => scanForMarkers(dir, TEST_MARKERS, filename => {
+        if (filename === lease) rmSync(filename);
+        return readFileSync(filename);
+      })).not.toThrow();
+      const error = Object.assign(new Error('vanished non-live file'), { code: 'ENOENT' });
+      expect(() => scanForMarkers(dir, TEST_MARKERS, () => { throw error; })).toThrow(error);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it('fails closed on an unreadable tree', () => {
     const dir = fakeConfig();
     try {

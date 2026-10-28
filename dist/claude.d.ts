@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { type ChildCompletion } from './child-completion.js';
 /**
  * Borg CLI launcher
  *
@@ -18,6 +19,7 @@ import { spawn } from 'child_process';
 import { type ActiveCube, type BorgCli } from './cubes.js';
 import { buildDefaultAssimilateDeps } from './assimilate-deps.js';
 import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
+import { type OpenCodeInstallation } from './opencode-installation.js';
 export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
 export declare class OpenCodeTargetedLaunchConfigError extends Error {
     readonly code = "OPENCODE_TARGETED_LAUNCH_CONFIG";
@@ -41,11 +43,13 @@ export declare function launchOpenCodeProcess(options: {
     connect?: typeof connectOpenCodeDrone;
     injectKickoff?: typeof injectInitialKickoff;
     allocatePort?: typeof allocateOpenCodePort;
+    installation?: OpenCodeInstallation;
 }): Promise<{
     launchArgs: string[];
     launchEnv: NodeJS.ProcessEnv;
     process: ReturnType<typeof spawn>;
+    completion: Promise<ChildCompletion>;
 }>;
 export declare function runAssimilateEntry(args: readonly string[], buildDeps?: AssimilateDepsBuilder): Promise<number>;
-export declare function ensureResolvedCliConfigured(cli: BorgCli, active?: ActiveCube | null): void;
+export declare function ensureResolvedCliConfigured(cli: BorgCli, active?: ActiveCube | null, launchScopedOpenCode?: boolean): void;
 //# sourceMappingURL=claude.d.ts.map

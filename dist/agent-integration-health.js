@@ -4,8 +4,9 @@ import which from 'which';
 import { inspectManagedAgentHookConfigs, isOpenCodeMcpServerConfigured, refreshManagedAgentHookConfigs, refreshManagedAgentMcpConfigs, } from './config-utils.js';
 import { borgHomeRoot, isCanonicalPath } from './private-root.js';
 import { getPackageVersion } from './version.js';
-import { buildBorgPluginSource, installBorgPlugin, openCodePluginPath, } from './opencode-plugin.js';
+import { buildBorgPluginSource, openCodePluginPath, } from './opencode-plugin.js';
 import { openCodeStartupDiagnosticLogPath } from './opencode-drone.js';
+import { hasLaunchScopedOpenCodePlugins, migrateLegacyOpenCodePlugin, registerLaunchScopedOpenCodePlugins } from './opencode-launch-plugin.js';
 export const AGENT_HOOK_BINS = [
     'borg-regen',
     'borg-clear-rewake',
@@ -50,6 +51,9 @@ function inspectOpenCodePlugin(homeDir, expectedVersion) {
         }
         catch (error) {
             if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+                if (hasLaunchScopedOpenCodePlugins(homeDir))
+                    return { path: pluginPath, configured: true,
+                        status: 'ok', version: expectedVersion, detail: 'launch-scoped V1/V2 entrypoints' };
                 if (!isCanonicalPath(pluginPath)) {
                     return {
                         path: pluginPath,
@@ -170,7 +174,9 @@ function renderBin(bin, expectedVersion) {
 function renderOpenCodePlugin(plugin, expectedVersion) {
     const prefix = 'OpenCode borg-orient.js plugin:';
     switch (plugin.status) {
-        case 'ok': return `${prefix} ok (${plugin.version})`;
+        case 'ok': return plugin.detail === 'launch-scoped V1/V2 entrypoints'
+            ? `OpenCode plugins: generated for V1 or V2 on each Borg launch (${plugin.version})`
+            : `${prefix} ok (${plugin.version})`;
         case 'present': return `${prefix} present`;
         case 'absent': return `${prefix} absent`;
         case 'missing': return `${prefix} missing at ${plugin.path}`;
@@ -287,8 +293,15 @@ export function refreshAndVerifyManagedAgentIntegrations() {
         failures.push(`${error instanceof Error ? error.message : String(error)}. ` +
             'Repair the named managed hook config, then rerun borg update --yes');
     }
-    if (isOpenCodeMcpServerConfigured())
-        installBorgPlugin();
+    try {
+        if (isOpenCodeMcpServerConfigured()) {
+            migrateLegacyOpenCodePlugin();
+            registerLaunchScopedOpenCodePlugins();
+        }
+    }
+    catch (error) {
+        failures.push(error instanceof Error ? error.message : String(error));
+    }
     try {
         assertAgentIntegrationHealthy(inspectAgentIntegrationHealth());
     }

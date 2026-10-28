@@ -53,6 +53,8 @@ export declare function formatPatchedRoleSectionResult(action: 'replace' | 'inse
     id: string;
 }, advisory?: unknown): string;
 export declare function connectOpenCodeRuntime(active: {
+    cubeId?: string;
+    droneId?: string;
     worktree?: string;
     droneLabel: string;
     name: string;

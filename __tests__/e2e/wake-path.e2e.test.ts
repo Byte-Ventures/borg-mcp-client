@@ -16,6 +16,9 @@ import { installTestServer, openRealServer } from '../../test/support/real-serve
 import { fakeCodex, fakeOpenCode } from '../../test/support/fake-agents.mjs';
 
 const enabled = process.env.BORG_E2E === '1';
+if (process.env.CI === 'true' && process.env.OPENCODE_TEST_V2_BINARY && !enabled) {
+  throw new Error('The native OpenCode fleet gate was requested but BORG_E2E was cleared by test setup.');
+}
 const root = resolve(import.meta.dirname, '../..');
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -261,6 +264,18 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     for (const seat of fleet.filter((seat) => seat.kind === 'codex')) {
       expect(seat.agent.turns.length, `assertion 8: Codex seat ${seat.label} must receive at least one turn`).toBeGreaterThan(0);
       expect(seat.agent.turns.every((turn: any) => turn.threadId === 'user'), `assertion 8: Codex seat ${seat.label} targeted threads ${seat.agent.turns.map((turn: any) => turn.threadId).join(', ')}, expected only the user thread`).toBe(true);
+    }
+    if (process.env.OPENCODE_TEST_V2_BINARY) {
+      // Extend the existing real-server fleet gate: replace one V1 endpoint
+      // with the published native V2 host and its actual Borg MCP child.
+      const seat = fleet[9];
+      await seat.mcp.close();
+      await seat.agent.close();
+      await run([join(root, 'test/fixtures/opencode-v2-probe.mjs')], {
+        ...seat.env, OPENCODE_TEST_V2_BINARY: process.env.OPENCODE_TEST_V2_BINARY,
+        OPENCODE_TEST_SEAT_HOME: seat.home, OPENCODE_TEST_SEAT_WORKTREE: seat.worktree,
+        OPENCODE_TEST_DRONE_ID: seat.droneId, OPENCODE_TEST_CUBE_ID: cube.cube_id,
+      });
     }
   } finally {
     for (const cleanup of cleanups.reverse()) await cleanup();
