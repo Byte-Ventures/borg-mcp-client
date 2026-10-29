@@ -1,4 +1,6 @@
+import type { BorgCli } from './cubes.js';
 export interface LaunchAllFlags {
+    cli?: BorgCli;
     mode?: 'tmux' | 'terminals' | 'pastelist';
     only?: string;
     dryRun?: boolean;

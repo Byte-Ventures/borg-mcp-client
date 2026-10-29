@@ -1,12 +1,18 @@
-// gh#556 Part 2 — argument parser for `borg launch-all [cube] [flags]` (spec §9.1).
-// Pure: rawArgs → validated LaunchAllArgs | error. Mirror of parse-assimilate-args.
-const SUPPORTED = '--mode <tmux|terminals|pastelist>, --only <name>, --dry-run, ' +
+const SUPPORTED = '--cli <claude|codex|opencode>, --mode <tmux|terminals|pastelist>, --only <name>, --dry-run, ' +
     '--no-attach, --yes/-y, --force, --launch-delay <ms>';
 export function parseLaunchAllArgs(rawArgs) {
     const flags = {};
     let cubeName;
     for (let i = 0; i < rawArgs.length; i++) {
         const arg = rawArgs[i];
+        if (arg === '--cli' || arg.startsWith('--cli=')) {
+            const value = arg === '--cli' ? rawArgs[++i] : arg.slice('--cli='.length);
+            if (value !== 'claude' && value !== 'codex' && value !== 'opencode') {
+                return { ok: false, error: '--cli requires claude, codex, or opencode' };
+            }
+            flags.cli = value;
+            continue;
+        }
         switch (arg) {
             case '--mode': {
                 const v = rawArgs[++i];

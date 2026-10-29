@@ -29,4 +29,12 @@ describe('buildLaunchCommand', () => {
   it('always emits a single-line command', () => {
     expect(buildLaunchCommand(candidate, '/usr/local/bin/borg')).not.toMatch(/[\r\n]/);
   });
+
+  it('passes the selected CLI through the identity-pinned launch command', () => {
+    const command = buildLaunchCommand(candidate, '/usr/local/bin/borg', { cli: 'opencode', keepOpenOnFail: true });
+    expect(command).toBe(
+      buildLaunchCommand(candidate, '/usr/local/bin/borg') +
+      ' --cli \'opencode\' || { echo "borg launch failed — press Enter to close"; read _; }',
+    );
+  });
 });

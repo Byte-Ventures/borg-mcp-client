@@ -11,8 +11,17 @@ export function parseSeatsArgs(args) {
 export function parseLaunchSeatArgs(args) {
     let target;
     let cube;
+    let cli;
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
+        if (arg === '--cli' || arg.startsWith('--cli=')) {
+            const value = arg === '--cli' ? args[++i] : arg.slice('--cli='.length);
+            if (value !== 'claude' && value !== 'codex' && value !== 'opencode') {
+                return { ok: false, error: '--cli requires claude, codex, or opencode' };
+            }
+            cli = value;
+            continue;
+        }
         if (arg === '--cube') {
             const next = args[i + 1];
             if (!next || next.startsWith('-')) {
@@ -38,7 +47,7 @@ export function parseLaunchSeatArgs(args) {
     }
     if (!target)
         return { ok: false, error: 'requires a drone label or id prefix' };
-    return { ok: true, target, ...(cube ? { cube } : {}) };
+    return { ok: true, target, ...(cube ? { cube } : {}), ...(cli ? { cli } : {}) };
 }
 function safeRealpath(deps, path) {
     try {
@@ -208,7 +217,7 @@ export async function runLaunchSeat(args, deps) {
         droneLabel: selected.droneLabel,
     };
     try {
-        return await deps.launchBareBorg(selected.canonicalWorktree, expectation);
+        return await deps.launchBareBorg(selected.canonicalWorktree, expectation, ...(args.cli ? [args.cli] : []));
     }
     catch (error) {
         deps.stderr(`borg launch: failed to start borg in ${selected.canonicalWorktree}: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -223,8 +232,8 @@ export function buildDefaultSeatCommandDeps() {
         getProjectCliPreference: getProjectCliPreferenceForPath,
         pathExists: existsSync,
         realpath: realpathSync,
-        launchBareBorg: (worktree, expectation) => new Promise((resolve, reject) => {
-            const child = spawn(resolveBorgPath(), [], {
+        launchBareBorg: (worktree, expectation, cli) => new Promise((resolve, reject) => {
+            const child = spawn(resolveBorgPath(), cli ? ['--cli', cli] : [], {
                 cwd: worktree,
                 stdio: 'inherit',
                 shell: false,

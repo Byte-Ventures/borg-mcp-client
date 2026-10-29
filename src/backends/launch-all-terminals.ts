@@ -4,6 +4,7 @@
 // session, so no post-launch attach. Hard-fails if no compatible terminal found.
 
 import type { DroneCandidate } from '../launch-all-discovery.js';
+import type { BorgCli } from '../cubes.js';
 import type { LaunchAllDeps } from '../launch-all-deps.js';
 import { buildLaunchCommand } from '../launch-all-command.js';
 import { writeLockMarker } from '../launch-all-locks.js';
@@ -19,6 +20,7 @@ const TERMINAL_APPS = [
 
 export interface TerminalsOpts {
   borgPath: string;
+  cli?: BorgCli;
   platform: NodeJS.Platform;
   cubeName: string;
   launchedAtISO: string;
@@ -53,7 +55,7 @@ async function launchMacOS(candidates: DroneCandidate[], opts: TerminalsOpts, de
   for (let i = 0; i < candidates.length; i++) {
     const c = candidates[i];
     if (i > 0 && opts.launchDelayMs > 0) await opts.sleep(opts.launchDelayMs); // rate-limit stagger
-    const cmd = buildLaunchCommand(c, opts.borgPath);
+    const cmd = buildLaunchCommand(c, opts.borgPath, { cli: opts.cli });
     const title = composeTerminalTitle({ label: c.droneLabel, cubeName: opts.cubeName }, '');
     const script = hasITerm
       ? `tell application "iTerm"\n  if (count of windows) = 0 then\n    set launchedWindow to (create window with default profile command "${appleScriptEscape(cmd)}")\n    tell current session of launchedWindow to set name to "${appleScriptEscape(title)}"\n  else\n    tell current window\n      set launchedTab to (create tab with default profile command "${appleScriptEscape(cmd)}")\n      tell current session of launchedTab to set name to "${appleScriptEscape(title)}"\n    end tell\n  end if\nend tell`
@@ -102,7 +104,7 @@ async function launchLinux(candidates: DroneCandidate[], opts: TerminalsOpts, de
     const title = composeTerminalTitle({ label: c.droneLabel, cubeName: opts.cubeName }, '');
     const cmd =
       `printf '\\033]0;%s\\007' ${shellEscape(title)}; ` +
-      buildLaunchCommand(c, opts.borgPath, { keepOpenOnFail: true });
+      buildLaunchCommand(c, opts.borgPath, { keepOpenOnFail: true, cli: opts.cli });
     // `<term> -e sh -c '<cmd>'` opens a new window running the command.
     await deps.spawnDetached(term, ['-e', 'sh', '-c', cmd]);
     writeLockMarker(deps, c.cubeId, c.droneLabel, c.worktreeDir, opts.launchedAtISO);

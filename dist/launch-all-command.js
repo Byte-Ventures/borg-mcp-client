@@ -19,7 +19,8 @@ export function resolveBorgPath() {
  */
 export function buildLaunchCommand(candidate, borgPath, opts = {}) {
     const base = `cd ${shellEscape(candidate.worktreeDir)} && ` +
-        `${shellEscape(borgPath)} launch ${shellEscape(candidate.droneId)}`;
+        `${shellEscape(borgPath)} launch ${shellEscape(candidate.droneId)}` +
+        (opts.cli ? ` --cli ${shellEscape(opts.cli)}` : '');
     if (opts.keepOpenOnFail) {
         return `${base} || { echo "borg launch failed — press Enter to close"; read _; }`;
     }

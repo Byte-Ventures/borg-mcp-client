@@ -9,7 +9,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { mkdirSync, writeFileSync, unlinkSync } from './guarded-fs.js';
 import { createInterface } from 'node:readline/promises';
-import type { ActiveCube } from './cubes.js';
+import type { ActiveCube, BorgCli } from './cubes.js';
+import { detectCliAvailability } from './cli-platform.js';
 import {
   readAllProjectIdentities as cubesReadAllProjectIdentities,
   getProjectCliPreferenceForPath,
@@ -27,6 +28,8 @@ import { BorgServerTrustError } from './server-errors.js';
 export type RunSyncFn = (cmd: string, args: string[]) => string;
 
 export interface LaunchAllDeps {
+  /** Whether an explicitly requested agent executable is available on PATH. */
+  isCliInstalled: (cli: BorgCli) => boolean;
   /** Subprocess — sync, throws on non-zero exit (git, tmux -V, ...). */
   runSync: (cmd: string, args: string[], opts?: { cwd?: string }) => string;
   /** Subprocess — sync, returns exit code WITHOUT throwing (tmux has-session). */
@@ -105,6 +108,7 @@ export interface LaunchAllDeps {
 /** Real-IO factory wiring production modules (spec §10). Test code stubs LaunchAllDeps directly. */
 export function buildDefaultLaunchAllDeps(): LaunchAllDeps {
   return {
+    isCliInstalled: (cli) => detectCliAvailability()[cli] !== null,
     runSync: (cmd, args, opts) => {
       const r = spawnSync(cmd, args, { encoding: 'utf-8', cwd: opts?.cwd });
       if (r.error) throw r.error;

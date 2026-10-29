@@ -7,10 +7,22 @@ import { runTerminalsBackend } from '../src/backends/launch-all-terminals.js';
 import type { DroneCandidate } from '../src/launch-all-discovery.js';
 import type { ActiveCube } from '../src/cubes.js';
 import { defaultProbeSeat } from '../src/seat-probe.js';
+import { detectCliAvailability } from '../src/cli-platform.js';
 
 vi.mock('../src/seat-probe.js', () => ({ defaultProbeSeat: vi.fn() }));
+vi.mock('../src/cli-platform.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/cli-platform.js')>(),
+  detectCliAvailability: vi.fn(),
+}));
 
 describe('batch launch production dependencies', () => {
+  it('uses installed executable discovery for the explicit CLI preflight', () => {
+    vi.mocked(detectCliAvailability).mockReturnValue({ claude: '/bin/claude', codex: null, opencode: '/bin/opencode' });
+    const deps = buildDefaultLaunchAllDeps();
+    expect(deps.isCliInstalled('claude')).toBe(true);
+    expect(deps.isCliInstalled('codex')).toBe(false);
+    expect(deps.isCliInstalled('opencode')).toBe(true);
+  });
   it.each(['indeterminate', 'unreachable', 'server-failure'] as const)(
     'clears a cached worker classification when the identity probe returns %s', async (status) => {
       vi.mocked(defaultProbeSeat).mockResolvedValueOnce(status);

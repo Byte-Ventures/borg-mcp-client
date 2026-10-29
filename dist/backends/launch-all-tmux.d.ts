@@ -1,8 +1,10 @@
 import type { DroneCandidate } from '../launch-all-discovery.js';
+import type { BorgCli } from '../cubes.js';
 import type { LaunchAllDeps } from '../launch-all-deps.js';
 export interface TmuxOpts {
     sessionName: string;
     borgPath: string;
+    cli?: BorgCli;
     /** 'attach' = attach-session; 'switch' = switch-client (nested tmux); 'none' = skip. */
     attachMode: 'attach' | 'switch' | 'none';
     /** ISO-8601 captured before the first send-keys (lock-marker launchedAt). */

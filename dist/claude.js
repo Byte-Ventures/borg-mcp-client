@@ -295,7 +295,7 @@ async function main() {
             process.stderr.write(`Run \`borg launch --help\` for usage.\n`);
             process.exit(1);
         }
-        process.exit(await runLaunchSeat({ target: parsed.target, ...(parsed.cube ? { cube: parsed.cube } : {}) }, buildDefaultSeatCommandDeps()));
+        process.exit(await runLaunchSeat({ target: parsed.target, ...(parsed.cube ? { cube: parsed.cube } : {}), ...(parsed.cli ? { cli: parsed.cli } : {}) }, buildDefaultSeatCommandDeps()));
     }
     if (process.argv[2] === 'representative') {
         // Loaded on demand: the representative facade is unrelated to agent launch.

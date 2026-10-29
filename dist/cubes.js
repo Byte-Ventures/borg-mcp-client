@@ -19,6 +19,7 @@ import { readFile } from 'node:fs/promises';
 import { mkdir, rename, unlink, writeFile } from './guarded-fs.js';
 import { dirname, join, resolve } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
+import { withStoreLock } from './seat-store.js';
 import { getActiveSeatCredential, getActiveSeatForWorktree, getSeatForWorktree, hasSeatForWorktree, observeSeat, readAllActiveSeats, refreshSeatMetadata, resetSeatForWorktree, seatRef, } from './seats.js';
 const CUBES_DIR = borgConfigRoot();
 const LAUNCH_FILE = join(CUBES_DIR, 'launch.json');
@@ -486,11 +487,15 @@ export async function readAllProjectIdentities() {
  * sibling worktree but the process still began in the invoking checkout.
  */
 export async function setProjectCliPreference(cli, dir) {
-    const existing = await readLaunchFile();
-    if (existing === UNREADABLE_STATE)
-        throw unreadableStateError(LAUNCH_FILE);
-    const next = existing ?? { projects: {} };
-    next.projects[findProjectRoot(dir)] = { cli };
-    await writeLaunchFile(next);
+    // Atomic rename protects readers; the shared lock also prevents simultaneous
+    // drone launches from overwriting each other's read-modify-write updates.
+    await withStoreLock(`${LAUNCH_FILE}.lock`, async () => {
+        const existing = await readLaunchFile();
+        if (existing === UNREADABLE_STATE)
+            throw unreadableStateError(LAUNCH_FILE);
+        const next = existing ?? { projects: {} };
+        next.projects[findProjectRoot(dir)] = { cli };
+        await writeLaunchFile(next);
+    }, { secureRoot: CUBES_DIR, rootMode: 'owner-controlled' });
 }
 //# sourceMappingURL=cubes.js.map

@@ -3,6 +3,7 @@
 // `borg launch <droneId>`. Idempotent: reuses an existing session (adds windows).
 
 import type { DroneCandidate } from '../launch-all-discovery.js';
+import type { BorgCli } from '../cubes.js';
 import type { LaunchAllDeps } from '../launch-all-deps.js';
 import { buildLaunchCommand } from '../launch-all-command.js';
 import { writeLockMarker } from '../launch-all-locks.js';
@@ -10,6 +11,7 @@ import { writeLockMarker } from '../launch-all-locks.js';
 export interface TmuxOpts {
   sessionName: string;
   borgPath: string;
+  cli?: BorgCli;
   /** 'attach' = attach-session; 'switch' = switch-client (nested tmux); 'none' = skip. */
   attachMode: 'attach' | 'switch' | 'none';
   /** ISO-8601 captured before the first send-keys (lock-marker launchedAt). */
@@ -59,7 +61,7 @@ export async function runTmuxBackend(
     // tmux-level window name (status bar). The agent's own OSC-0 may update it later.
     deps.runSync('tmux', ['rename-window', '-t', windowId, c.droneLabel]);
 
-    const cmd = buildLaunchCommand(c, borgPath, { keepOpenOnFail: true });
+    const cmd = buildLaunchCommand(c, borgPath, { keepOpenOnFail: true, cli: opts.cli });
     deps.runSync('tmux', ['send-keys', '-t', windowId, cmd, 'Enter']);
 
     // Lock marker written immediately after dispatch (best-effort liveness signal).

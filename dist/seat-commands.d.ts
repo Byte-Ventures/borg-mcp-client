@@ -25,9 +25,9 @@ export interface SeatCommandDeps {
     getProjectCliPreference: (worktree: string) => Promise<BorgCli | null>;
     pathExists: (path: string) => boolean;
     realpath: (path: string) => string;
-    /** Run this same borg executable with no args from the selected worktree,
+    /** Run this same borg executable with an optional CLI choice from the selected worktree,
      * carrying only the expected durable identity for child-side verification. */
-    launchBareBorg: (worktree: string, expectation: LaunchSeatExpectation) => Promise<number>;
+    launchBareBorg: (worktree: string, expectation: LaunchSeatExpectation, cli?: BorgCli) => Promise<number>;
     stdout: (line: string) => void;
     stderr: (line: string) => void;
 }
@@ -42,6 +42,7 @@ export type ParsedLaunchSeatArgs = {
     ok: true;
     target: string;
     cube?: string;
+    cli?: BorgCli;
 } | {
     ok: false;
     error: string;
@@ -53,6 +54,7 @@ export declare function runSeats(deps: SeatCommandDeps): Promise<number>;
 export declare function runLaunchSeat(args: {
     target: string;
     cube?: string;
+    cli?: BorgCli;
 }, deps: SeatCommandDeps): Promise<number>;
 export declare function buildDefaultSeatCommandDeps(): SeatCommandDeps;
 //# sourceMappingURL=seat-commands.d.ts.map

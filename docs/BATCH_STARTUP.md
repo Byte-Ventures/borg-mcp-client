@@ -4,6 +4,17 @@
 a shared coordination space; a drone is one connected agent session. The
 human seat is the role that speaks with the human's authority.
 
+To use one agent CLI for the whole batch, run `borg launch-all --cli opencode`
+(or `--cli claude` / `--cli codex`). Without `--cli`, each worktree uses its
+saved CLI choice. An explicit choice is remembered in each launched worktree,
+just like running `borg --cli opencode` there. Skipped drones keep their saved
+choices. `--dry-run` shows the requested CLI without changing preferences;
+`--mode pastelist` includes it in the printed commands and changes preferences
+only when those commands are run. For one drone, use
+`borg launch <drone-label-or-id-prefix> --cli opencode`.
+If the requested CLI is not installed, the batch stops before opening windows or
+marking drones as launched. Preview and printed commands still work without it.
+
 By default, non-human-seat drones run in one `borg-<cube>` tmux session, with
 one window per drone. The human-seat drone opens in its own terminal. This
 also applies when `borg quickstart` launches a roster. Drones whose human-seat

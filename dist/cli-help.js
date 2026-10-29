@@ -24,6 +24,7 @@ export function launchAllHelpText(version) {
         `Usage:\n` +
         `  borg launch-all [cube] [options]\n\n` +
         `Options:\n` +
+        `  --cli <claude|codex|opencode>          Choose the agent CLI for every launched drone\n` +
         `  --mode <tmux|terminals|pastelist>     Select the launch backend\n` +
         `  --only <name>                         Launch one role or drone label\n` +
         `  --dry-run                             Show what would launch\n` +
@@ -37,6 +38,9 @@ export function launchAllHelpText(version) {
         `Drones whose human-seat identity is unknown also open in terminals. If tmux is\n` +
         `missing, all drones open in terminals; without a compatible terminal, commands\n` +
         `are printed for manual use. Explicit modes below override this routing.\n\n` +
+        `CLI choice: without --cli, each worktree uses its saved choice. An explicit\n` +
+        `choice is remembered in each worktree when its drone starts. --dry-run and\n` +
+        `--mode pastelist do not change saved choices.\n\n` +
         `Modes:\n` +
         `  terminals  Open each drone in its own terminal tab, with the drone's name as\n` +
         `             the tab title. Terminal.app opens one named window for each drone\n` +
@@ -93,6 +97,7 @@ export function launchSeatHelpText(version) {
         `  borg launch --help\n\n` +
         `Options:\n` +
         `  --cube <name>                Disambiguate the same drone label across cubes\n` +
+        `  --cli <claude|codex|opencode> Choose and remember the agent CLI for this worktree\n` +
         `  --help, -h                   Show this help\n`);
 }
 export function representativeHelpText(version) {

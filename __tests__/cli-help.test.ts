@@ -88,12 +88,13 @@ describe('client subcommand help', () => {
   it('documents every accepted launch-all option', () => {
     const text = launchAllHelpText('9.9.9');
     for (const flag of [
-      '--mode', '--only', '--dry-run', '--no-attach', '--yes', '--force',
+      '--cli', '--mode', '--only', '--dry-run', '--no-attach', '--yes', '--force',
       '--launch-delay', '--help',
     ]) expect(text).toContain(flag);
     expect(text).toContain('non-human-seat drones run in tmux');
     expect(text).toContain('missing, all drones open in terminals');
-    expect(text).not.toContain('--cli');
+    expect(text).toContain('--cli <claude|codex|opencode>');
+    expect(text).toContain('choice is remembered in each worktree');
     expect(text).toContain('--mode <tmux|terminals|pastelist>');
     expect(text).not.toContain('--mode <tmux|windows|pastelist>');
     expect(text).toContain(
@@ -314,11 +315,10 @@ describe('gh#556 Part 2 — launch-all in top-level help', () => {
     expect(topLevelHelpText('9.9.9')).toContain('borg launch-all [cube]');
   });
 
-  it('keeps direct --cli launch without teaching the removed launch-all flag', () => {
+  it('keeps the direct --cli launch alongside the batch command', () => {
     const t = topLevelHelpText('9.9.9');
     expect(t).toContain('borg                     Show the launch menu in a repository root; resume directly in a linked worktree');
     expect(t).toContain('borg --cli claude|codex|opencode  Launch that agent CLI directly');
-    expect(t).not.toContain('borg launch-all [cube] --cli claude|codex|opencode');
   });
 });
 

@@ -122,9 +122,11 @@ describe('seat single-store writer guard (SR#5)', () => {
   it('the cubes.ts hydration adapter never reaches a raw store backend', () => {
     const cubes = read('cubes.ts');
     // cubes.ts is a thin adapter over the seats.ts API — never the store itself.
+    // Its launch.json preference writer may use withStoreLock for mutual
+    // exclusion; that primitive does not provide access to seat-store data.
     expect(cubes).not.toContain('getServerCredentialBackend');
     expect(cubes).not.toContain('readStoreFile');
-    expect(cubes).not.toContain('withStore');
+    expect(cubes).not.toMatch(/\bwithStore\b/);
     expect(cubes).not.toContain('SEATS_FILE');
   });
 
