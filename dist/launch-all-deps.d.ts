@@ -1,8 +1,10 @@
-import type { ActiveCube } from './cubes.js';
+import type { ActiveCube, BorgCli } from './cubes.js';
 import { type SeatStatus } from './seat-probe.js';
 /** Subprocess runner — sync, returns stdout, THROWS on non-zero exit or ENOENT. */
 export type RunSyncFn = (cmd: string, args: string[]) => string;
 export interface LaunchAllDeps {
+    /** Whether an explicitly requested agent executable is available on PATH. */
+    isCliInstalled: (cli: BorgCli) => boolean;
     /** Subprocess — sync, throws on non-zero exit (git, tmux -V, ...). */
     runSync: (cmd: string, args: string[], opts?: {
         cwd?: string;

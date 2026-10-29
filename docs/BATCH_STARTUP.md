@@ -12,6 +12,8 @@ choices. `--dry-run` shows the requested CLI without changing preferences;
 `--mode pastelist` includes it in the printed commands and changes preferences
 only when those commands are run. For one drone, use
 `borg launch <drone-label-or-id-prefix> --cli opencode`.
+If the requested CLI is not installed, the batch stops before opening windows or
+marking drones as launched. Preview and printed commands still work without it.
 
 By default, non-human-seat drones run in one `borg-<cube>` tmux session, with
 one window per drone. The human-seat drone opens in its own terminal. This

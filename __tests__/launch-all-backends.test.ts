@@ -35,6 +35,7 @@ function makeStubDeps(over: Partial<LaunchAllDeps> = {}): LaunchAllDeps {
     getRoster: vi.fn(async () => ({ drones: [] })),
     getCube: vi.fn(async () => ({ id: CUBE_ID, name: 'r', roles: [] })),
     getCliPreferenceForPath: vi.fn(async () => null),
+    isCliInstalled: vi.fn(() => true),
     readAllProjectIdentities: vi.fn(async () => []),
     findProjectRoot: vi.fn((d: string) => d),
     getActiveCube: vi.fn(async () => null),

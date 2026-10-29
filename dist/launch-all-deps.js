@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { mkdirSync, writeFileSync, unlinkSync } from './guarded-fs.js';
 import { createInterface } from 'node:readline/promises';
+import { detectCliAvailability } from './cli-platform.js';
 import { readAllProjectIdentities as cubesReadAllProjectIdentities, getProjectCliPreferenceForPath, findProjectRoot, getActiveCube, } from './cubes.js';
 import { getRoster, getCube } from './remote-client.js';
 import { defaultProbeSeat } from './seat-probe.js';
@@ -18,6 +19,7 @@ import { BorgServerTrustError } from './server-errors.js';
 /** Real-IO factory wiring production modules (spec §10). Test code stubs LaunchAllDeps directly. */
 export function buildDefaultLaunchAllDeps() {
     return {
+        isCliInstalled: (cli) => detectCliAvailability()[cli] !== null,
         runSync: (cmd, args, opts) => {
             const r = spawnSync(cmd, args, { encoding: 'utf-8', cwd: opts?.cwd });
             if (r.error)

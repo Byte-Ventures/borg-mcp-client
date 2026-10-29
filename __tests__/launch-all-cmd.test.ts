@@ -37,6 +37,7 @@ function fleet(n: number): { paths: string[]; identities: Array<{ projectPath: s
 
 function makeStubDeps(over: Partial<LaunchAllDeps> = {}): LaunchAllDeps {
   return {
+    isCliInstalled: vi.fn(() => true),
     runSync: vi.fn(() => ''), // tmux/uname/git all succeed empty unless overridden
     runSyncExitCode: vi.fn(() => 1), // has-session: absent
     attachInteractive: vi.fn(),
@@ -102,6 +103,46 @@ function makeTmuxFleetDeps(
 }
 
 describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
+  it.each(['claude', 'codex', 'opencode'] as const)('rejects missing %s before any batch dispatch or marker', async (cli) => {
+    for (const mode of [undefined, 'tmux', 'terminals'] as const) {
+      const { paths, identities } = fleet(2);
+      const deps = makeTmuxFleetDeps(paths, identities, {
+        isTTY: vi.fn(() => true), pathExists: vi.fn(() => true),
+        isCliInstalled: vi.fn(() => false),
+      });
+      expect(await runLaunchAll({ cubeName: 'myrepo', flags: { cli, mode } }, deps, OPTS)).toBe(1);
+      expect(stderrOf(deps)).toContain(`${cli} CLI is not installed; nothing was launched.`);
+      expect(deps.isCliInstalled).toHaveBeenCalledWith(cli);
+      expect(deps.writeFile).not.toHaveBeenCalled();
+      expect(deps.mkdirp).not.toHaveBeenCalled();
+      expect(deps.spawnDetached).not.toHaveBeenCalled();
+      expect(deps.attachInteractive).not.toHaveBeenCalled();
+      expect(deps.getRoster).not.toHaveBeenCalled();
+      expect((deps.runSync as any).mock.calls.some(([cmd, args]: [string, string[]]) =>
+        cmd === 'osascript' || ['new-session', 'new-window', 'send-keys'].includes(args[0])
+      )).toBe(false);
+    }
+  });
+
+  it('can preview and print a CLI that is not installed, without changing preferences', async () => {
+    for (const flags of [{ cli: 'opencode', dryRun: true }, { cli: 'opencode', mode: 'pastelist' }] as const) {
+      const { paths, identities } = fleet(2);
+      const deps = makeTmuxFleetDeps(paths, identities, { isCliInstalled: vi.fn(() => false) });
+      expect(await runLaunchAll({ cubeName: 'myrepo', flags }, deps, OPTS)).toBe(0);
+      expect(stdoutOf(deps)).toContain('opencode');
+      expect(deps.isCliInstalled).not.toHaveBeenCalled();
+      expect(deps.writeFile).not.toHaveBeenCalled();
+      expect(deps.spawnDetached).not.toHaveBeenCalled();
+    }
+  });
+
+  it('keeps per-worktree CLI selection when no batch CLI is given', async () => {
+    const { paths, identities } = fleet(2);
+    const deps = makeTmuxFleetDeps(paths, identities, { isCliInstalled: vi.fn(() => false) });
+    expect(await runLaunchAll({ cubeName: 'myrepo', flags: { mode: 'tmux' } }, deps, OPTS)).toBe(0);
+    expect(deps.isCliInstalled).not.toHaveBeenCalled();
+  });
+
   it.each(['claude', 'codex', 'opencode'])('forwards --cli %s through tmux, terminal, and printed launches', async (cli) => {
     for (const mode of ['tmux', 'terminals', 'pastelist']) {
       const { paths, identities } = fleet(2);

@@ -411,6 +411,12 @@ export async function runLaunchAll(args, deps, opts = {}) {
         }
         return 0;
     }
+    // Check before dispatch creates any windows or live-session markers. Preview
+    // and printed commands remain useful even before the chosen CLI is installed.
+    if (sel.backend !== 'pastelist' && args.flags.cli && !deps.isCliInstalled(args.flags.cli)) {
+        deps.stderr(`borg launch-all: ${args.flags.cli} CLI is not installed; nothing was launched.\n`);
+        return 1;
+    }
     // 6. >6 confirmation
     if (launchable.length > 6 && !args.flags.yes) {
         const ans = await deps.prompt(`About to launch ${launchable.length} drones for cube '${cubeName}'. Continue? [y/N]: `);

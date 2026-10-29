@@ -42,6 +42,7 @@ function makeStubDeps(over: Partial<LaunchAllDeps> = {}): LaunchAllDeps {
     getCube: vi.fn(async () => ({ id: CUBE_ID, name: 'myrepo', roles: [] })),
     probeSeat: vi.fn(async () => 'live' as const),
     getCliPreferenceForPath: vi.fn(async () => null),
+    isCliInstalled: vi.fn(() => true),
     readAllProjectIdentities: vi.fn(async () => []),
     findProjectRoot: vi.fn((d: string) => d),
     getActiveCube: vi.fn(async () => null),

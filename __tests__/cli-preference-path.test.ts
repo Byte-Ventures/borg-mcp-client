@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fork } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 describe('named CLI preference persistence', () => {
   const originalCwd = process.cwd();
@@ -49,6 +51,58 @@ describe('named CLI preference persistence', () => {
     ) as { projects: Record<string, { cli: string }> };
     expect(launchFile.projects[worktreeA]).toEqual({ cli: 'codex' });
     expect(launchFile.projects[worktreeB]).toEqual({ cli: 'claude' });
+  });
+
+  it('preserves simultaneous updates in one process and keeps unrelated preferences', async () => {
+    const { setProjectCliPreference } = await import('../src/cubes.js');
+    await setProjectCliPreference('codex', worktreeA);
+    const paths = Array.from({ length: 8 }, (_, n) => join(fixture, `drone-${n}`));
+    await Promise.all(paths.map(path => setProjectCliPreference('opencode', path)));
+    const actual = JSON.parse(readFileSync(join(fixture, '.config', 'borgmcp', 'launch.json'), 'utf8'));
+    expect(actual.projects).toEqual({
+      [worktreeA]: { cli: 'codex' },
+      ...Object.fromEntries(paths.map(path => [path, { cli: 'opencode' }])),
+    });
+  });
+
+  it('preserves choices from independently launched drone processes', async () => {
+    const { setProjectCliPreference } = await import('../src/cubes.js');
+    await setProjectCliPreference('codex', worktreeA);
+    // Older launch.json writers created owner-controlled 0755 directories.
+    // Lock contention must work there as well as in a new private directory.
+    if (process.platform !== 'win32') chmodSync(join(fixture, '.config', 'borgmcp'), 0o755);
+    const paths = Array.from({ length: 8 }, (_, n) => join(fixture, `drone-${n}`));
+    const children = paths.map(path => fork(
+      fileURLToPath(new URL('./fixtures/cli-preference-child.ts', import.meta.url)),
+      [path],
+      { execArgv: ['--import', import.meta.resolve('tsx')], env: { ...process.env, BORG_STATE_ROOT: fixture }, silent: true },
+    ));
+    const ready = children.map(child => new Promise<void>((resolve, reject) => {
+      child.once('message', () => resolve());
+      child.once('error', reject);
+      child.once('exit', () => reject(new Error('CLI preference child exited before the barrier')));
+    }));
+    const finished = children.map(child => new Promise<void>((resolve, reject) => {
+      let stderr = '';
+      child.stderr!.on('data', data => { stderr += data.toString(); });
+      child.once('error', reject);
+      child.once('exit', code => code === 0 ? resolve() : reject(new Error(`CLI preference child exited ${code}: ${stderr}`)));
+    }));
+    // Attach failure handlers while waiting for all contenders to reach the barrier.
+    for (const result of finished) void result.catch(() => {});
+    try {
+      await Promise.all(ready);
+      for (const child of children) child.send('start');
+      await Promise.all(finished);
+      const actual = JSON.parse(readFileSync(join(fixture, '.config', 'borgmcp', 'launch.json'), 'utf8'));
+      expect(actual.projects).toEqual({
+        [worktreeA]: { cli: 'codex' },
+        ...Object.fromEntries(paths.map(path => [path, { cli: 'opencode' }])),
+      });
+    } finally {
+      for (const child of children) if (child.exitCode === null) child.kill();
+      await Promise.allSettled(finished);
+    }
   });
 
   it.each([
