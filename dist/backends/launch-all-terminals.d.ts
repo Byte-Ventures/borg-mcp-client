@@ -4,6 +4,7 @@ import type { LaunchAllDeps } from '../launch-all-deps.js';
 export interface TerminalsOpts {
     borgPath: string;
     cli?: BorgCli;
+    force?: boolean;
     platform: NodeJS.Platform;
     cubeName: string;
     launchedAtISO: string;

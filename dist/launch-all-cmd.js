@@ -446,12 +446,12 @@ export async function runLaunchAll(args, deps, opts = {}) {
             const workers = backendLaunchable.filter((c) => c.seat.isHumanSeat === false);
             const terminals = backendLaunchable.filter((c) => c.seat.isHumanSeat !== false);
             if (workers.length > 0) {
-                await runTmuxBackend(workers, { sessionName, borgPath, cli: args.flags.cli, attachMode: 'none', launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+                await runTmuxBackend(workers, { sessionName, borgPath, cli: args.flags.cli, force: args.flags.force, attachMode: 'none', launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
             }
             if (workers.length > 0 && terminals.length > 0 && launchDelayMs > 0)
                 await sleep(launchDelayMs);
             if (terminals.length > 0) {
-                await runTerminalsBackend(terminals, { borgPath, cli: args.flags.cli, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+                await runTerminalsBackend(terminals, { borgPath, cli: args.flags.cli, force: args.flags.force, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
             }
             const attachMode = resolveAttachMode(args, deps);
             if (attachMode !== 'none') {
@@ -463,7 +463,7 @@ export async function runLaunchAll(args, deps, opts = {}) {
         }
         else if (sel.backend === 'tmux') {
             const attachMode = resolveAttachMode(args, deps);
-            await runTmuxBackend(backendLaunchable, { sessionName, borgPath, cli: args.flags.cli, attachMode, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+            await runTmuxBackend(backendLaunchable, { sessionName, borgPath, cli: args.flags.cli, force: args.flags.force, attachMode, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
             if (attachMode === 'none') {
                 if (!deps.isTTY()) {
                     deps.stderr(`Launching in detached mode — stdout is non-TTY. Attach manually with: tmux attach -t ${sessionName}\n`);
@@ -472,10 +472,10 @@ export async function runLaunchAll(args, deps, opts = {}) {
             }
         }
         else if (sel.backend === 'terminals') {
-            await runTerminalsBackend(backendLaunchable, { borgPath, cli: args.flags.cli, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+            await runTerminalsBackend(backendLaunchable, { borgPath, cli: args.flags.cli, force: args.flags.force, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
         }
         else {
-            runPastelistBackend(launchable, borgPath, deps, args.flags.cli);
+            runPastelistBackend(launchable, borgPath, deps, args.flags.cli, args.flags.force);
             return 0; // pastelist: nothing to reconcile (operator pastes manually)
         }
     }
@@ -486,11 +486,16 @@ export async function runLaunchAll(args, deps, opts = {}) {
     // 9. roster reconciliation (best-effort; uses the first launchable seat)
     const statuses = await reconcileRoster(deps, launchable[0].seat, launchStartISO, launchable.map((c) => c.droneId), opts.now, opts.sleep);
     // 10. summary
-    deps.stdout(`\nborg launch-all: launched ${launchable.length} drones for cube '${cubeName}'\n\n`);
+    deps.stdout(`\nborg launch-all: sent launch commands for ${launchable.length} of ${discovered.length} drone(s) for cube '${cubeName}'${args.flags.cli ? ` using ${args.flags.cli}` : ''}\n\n`);
     for (const c of launchable) {
-        const status = statuses ? (statuses.get(c.droneId) === 'verified' ? 'VERIFIED' : 'unconfirmed (may still be joining)') : 'launched';
+        // Roster activity can come from a pre-existing session for this drone.
+        // It does not establish that the newly requested CLI finished starting.
+        const status = statuses.get(c.droneId) === 'verified'
+            ? 'roster activity seen (new session startup unconfirmed)'
+            : 'startup unconfirmed — check the drone window';
         deps.stdout(`  ${c.droneLabel}  ${c.worktreeDir}  ${status}\n`);
     }
+    deps.stdout('\nExisting sessions may still be running; check each new window for startup errors or prompts.\n');
     if (usesTmux) {
         deps.stdout(`\nAttach: tmux attach -t ${sessionName}\n`);
     }

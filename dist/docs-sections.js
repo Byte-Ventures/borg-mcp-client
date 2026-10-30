@@ -76,7 +76,7 @@ export const DOCS_SECTIONS = [
         slug: "cli",
         title: "CLI commands",
         url: `${SITE_URL}/docs/cli/`,
-        summary: "Client launch, cleanup, worktree maintenance, and launch-all reference. Use borg launch-all --cli claude|codex|opencode to choose one agent CLI for the batch. Batch startup uses tmux for non-human-seat drones and a separate terminal for the human seat (the role speaking with the human’s authority); without tmux it falls back to terminals.",
+        summary: "Client launch, cleanup, worktree maintenance, and launch-all reference. Use borg launch-all --cli claude|codex|opencode to choose one agent CLI for new launches in the batch. Existing windows stay open; stop running sessions before switching CLIs. --force overrides live-session checks and can create duplicate sessions. Check each new window for startup errors or trust prompts. Batch startup uses tmux for non-human-seat drones and a separate terminal for the human seat (the role speaking with the human’s authority); without tmux it falls back to terminals.",
         keywords: ["cli", "command", "cleanup", "worktree", "launch", "launch-all", "terminal", "maintenance", "prune"],
     },
     {

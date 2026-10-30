@@ -10,11 +10,12 @@ export function runPastelistBackend(
   candidates: DroneCandidate[],
   borgPath: string,
   deps: LaunchAllDeps,
-  cli?: BorgCli
+  cli?: BorgCli,
+  force?: boolean
 ): void {
   deps.stdout('# borg launch-all: open each worktree in a terminal window and run:\n\n');
   for (const c of candidates) {
     // No keep-open-on-fail: the operator owns their own shell in pastelist mode.
-    deps.stdout(buildLaunchCommand(c, borgPath, { cli }) + '\n');
+    deps.stdout(buildLaunchCommand(c, borgPath, { cli, force }) + '\n');
   }
 }

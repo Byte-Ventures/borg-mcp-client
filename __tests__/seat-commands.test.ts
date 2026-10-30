@@ -114,6 +114,12 @@ describe('seat command parsers', () => {
     });
   });
 
+  it('parses a force override with the selected CLI and cube', () => {
+    expect(parseLaunchSeatArgs(['--force', DRONE_A, '--cli', 'codex', '--cube', 'alpha'])).toEqual({
+      ok: true, target: DRONE_A, cli: 'codex', cube: 'alpha', force: true,
+    });
+  });
+
   it('rejects a missing target, missing cube value, and extra positionals', () => {
     expect(parseLaunchSeatArgs([])).toEqual({ ok: false, error: 'requires a drone label or id prefix' });
     expect(parseLaunchSeatArgs(['builder-aaaaaaaa', '--cube'])).toEqual({ ok: false, error: '--cube requires a cube name' });
@@ -404,12 +410,19 @@ describe('borg launch', () => {
     }), 'opencode');
   });
 
-  it('an explicit CLI cannot bypass a changed worktree identity', async () => {
+  it('passes force through only after the expected identity has been checked', async () => {
+    const cube = activeCube({ worktree: '/linked/a' });
+    const { deps, launchBareBorg } = depsFor([cube]);
+    expect(await runLaunchSeat({ target: DRONE_A, cli: 'codex', force: true }, deps)).toBe(0);
+    expect(launchBareBorg).toHaveBeenCalledWith('/real/a', expect.objectContaining({ droneId: DRONE_A }), 'codex', true);
+  });
+
+  it('an explicit CLI and force cannot bypass a changed worktree identity', async () => {
     const cube = activeCube();
     const { deps, launchBareBorg } = depsFor([cube], {
       getActiveSeatForWorktree: vi.fn(async () => activeSeat(activeCube({ droneId: DRONE_B })).record),
     });
-    expect(await runLaunchSeat({ target: DRONE_A, cli: 'opencode' }, deps)).toBe(1);
+    expect(await runLaunchSeat({ target: DRONE_A, cli: 'opencode', force: true }, deps)).toBe(1);
     expect(launchBareBorg).not.toHaveBeenCalled();
   });
   it('launches an unambiguous label by running bare borg in the canonical worktree', async () => {

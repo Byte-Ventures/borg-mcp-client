@@ -33,7 +33,7 @@ export async function runTmuxBackend(candidates, opts, deps) {
         }
         // tmux-level window name (status bar). The agent's own OSC-0 may update it later.
         deps.runSync('tmux', ['rename-window', '-t', windowId, c.droneLabel]);
-        const cmd = buildLaunchCommand(c, borgPath, { keepOpenOnFail: true, cli: opts.cli });
+        const cmd = buildLaunchCommand(c, borgPath, { keepOpenOnFail: true, cli: opts.cli, force: opts.force });
         deps.runSync('tmux', ['send-keys', '-t', windowId, cmd, 'Enter']);
         // Lock marker written immediately after dispatch (best-effort liveness signal).
         writeLockMarker(deps, c.cubeId, c.droneLabel, c.worktreeDir, launchedAtISO);

@@ -12,6 +12,7 @@ export interface TmuxOpts {
   sessionName: string;
   borgPath: string;
   cli?: BorgCli;
+  force?: boolean;
   /** 'attach' = attach-session; 'switch' = switch-client (nested tmux); 'none' = skip. */
   attachMode: 'attach' | 'switch' | 'none';
   /** ISO-8601 captured before the first send-keys (lock-marker launchedAt). */
@@ -61,7 +62,7 @@ export async function runTmuxBackend(
     // tmux-level window name (status bar). The agent's own OSC-0 may update it later.
     deps.runSync('tmux', ['rename-window', '-t', windowId, c.droneLabel]);
 
-    const cmd = buildLaunchCommand(c, borgPath, { keepOpenOnFail: true, cli: opts.cli });
+    const cmd = buildLaunchCommand(c, borgPath, { keepOpenOnFail: true, cli: opts.cli, force: opts.force });
     deps.runSync('tmux', ['send-keys', '-t', windowId, cmd, 'Enter']);
 
     // Lock marker written immediately after dispatch (best-effort liveness signal).

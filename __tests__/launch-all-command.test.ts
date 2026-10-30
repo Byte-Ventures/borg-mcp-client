@@ -26,6 +26,12 @@ describe('buildLaunchCommand', () => {
     );
   });
 
+  it('carries an explicit force override to the targeted launcher', () => {
+    expect(buildLaunchCommand(candidate, '/borg', { cli: 'codex', force: true })).toBe(
+      buildLaunchCommand(candidate, '/borg', { cli: 'codex' }) + ' --force',
+    );
+  });
+
   it('always emits a single-line command', () => {
     expect(buildLaunchCommand(candidate, '/usr/local/bin/borg')).not.toMatch(/[\r\n]/);
   });
