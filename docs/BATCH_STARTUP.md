@@ -27,7 +27,9 @@ finished starting. Check each new window for errors or prompts. Codex may ask
 you to trust a worktree before it starts the agent.
 
 By default, non-human-seat drones run in one `borg-<cube>` tmux session, with
-one window per drone. The human-seat drone opens in its own terminal. This
+one window per drone. Closing the terminal that displays tmux detaches from
+that session; its drones keep running. Reattach with `tmux attach -t borg-<cube>`
+(replace `<cube>` with the cube name). The human-seat drone opens in its own terminal. This
 also applies when `borg quickstart` launches a roster. Drones whose human-seat
 identity cannot be confirmed by the server open in terminals too; saved role
 metadata is not used after a failed check.
