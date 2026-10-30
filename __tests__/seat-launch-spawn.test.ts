@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
+import type { BorgCli } from '../src/cubes';
 import { buildDefaultSeatCommandDeps } from '../src/seat-commands';
 import { BORG_LAUNCH_EXPECTED_SEAT_ENV } from '../src/cubes';
 
@@ -10,7 +11,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
 }));
 
 describe('targeted launch subprocess', () => {
-  it.each([undefined, 'claude', 'codex', 'opencode'] as const)('carries CLI %s and the expected identity into the child', async (cli) => {
+  it.each([undefined, 'claude', 'codex', 'opencode'].flatMap((cli) => [false, true].map((force) => ({ cli, force }))))('carries CLI $cli, force $force, and the expected identity into the child', async ({ cli, force }) => {
     vi.mocked(spawn).mockImplementationOnce(() => {
       const child = new EventEmitter();
       setImmediate(() => child.emit('exit', 0, null));
@@ -23,10 +24,10 @@ describe('targeted launch subprocess', () => {
       droneLabel: 'builder',
       worktree: '/work/builder',
     };
-    expect(await buildDefaultSeatCommandDeps().launchBareBorg('/work/builder', expectation, cli)).toBe(0);
+    expect(await buildDefaultSeatCommandDeps().launchBareBorg('/work/builder', expectation, cli as BorgCli | undefined, force)).toBe(0);
     const [executable, args, options] = vi.mocked(spawn).mock.calls.at(-1)!;
     expect(executable).toBe(process.argv[1]);
-    expect(args).toEqual(cli ? ['--cli', cli] : []);
+    expect(args).toEqual([...(cli ? ['--cli', cli] : []), ...(force ? ['--force'] : [])]);
     expect(options).toMatchObject({ cwd: '/work/builder', stdio: 'inherit', shell: false });
     const encoded = (options as { env: NodeJS.ProcessEnv }).env[BORG_LAUNCH_EXPECTED_SEAT_ENV]!;
     expect(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))).toEqual(expectation);

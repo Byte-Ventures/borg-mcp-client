@@ -12,8 +12,13 @@ export function parseLaunchSeatArgs(args) {
     let target;
     let cube;
     let cli;
+    let force = false;
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
+        if (arg === '--force') {
+            force = true;
+            continue;
+        }
         if (arg === '--cli' || arg.startsWith('--cli=')) {
             const value = arg === '--cli' ? args[++i] : arg.slice('--cli='.length);
             if (value !== 'claude' && value !== 'codex' && value !== 'opencode') {
@@ -47,7 +52,7 @@ export function parseLaunchSeatArgs(args) {
     }
     if (!target)
         return { ok: false, error: 'requires a drone label or id prefix' };
-    return { ok: true, target, ...(cube ? { cube } : {}), ...(cli ? { cli } : {}) };
+    return { ok: true, target, ...(cube ? { cube } : {}), ...(cli ? { cli } : {}), ...(force ? { force: true } : {}) };
 }
 function safeRealpath(deps, path) {
     try {
@@ -217,6 +222,9 @@ export async function runLaunchSeat(args, deps) {
         droneLabel: selected.droneLabel,
     };
     try {
+        if (args.force) {
+            return await deps.launchBareBorg(selected.canonicalWorktree, expectation, args.cli, true);
+        }
         return await deps.launchBareBorg(selected.canonicalWorktree, expectation, ...(args.cli ? [args.cli] : []));
     }
     catch (error) {
@@ -232,8 +240,11 @@ export function buildDefaultSeatCommandDeps() {
         getProjectCliPreference: getProjectCliPreferenceForPath,
         pathExists: existsSync,
         realpath: realpathSync,
-        launchBareBorg: (worktree, expectation, cli) => new Promise((resolve, reject) => {
-            const child = spawn(resolveBorgPath(), cli ? ['--cli', cli] : [], {
+        launchBareBorg: (worktree, expectation, cli, force) => new Promise((resolve, reject) => {
+            const child = spawn(resolveBorgPath(), [
+                ...(cli ? ['--cli', cli] : []),
+                ...(force ? ['--force'] : []),
+            ], {
                 cwd: worktree,
                 stdio: 'inherit',
                 shell: false,
