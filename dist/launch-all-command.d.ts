@@ -20,5 +20,6 @@ export declare function buildLaunchCommand(candidate: {
 }, borgPath: string, opts?: {
     keepOpenOnFail?: boolean;
     cli?: BorgCli;
+    force?: boolean;
 }): string;
 //# sourceMappingURL=launch-all-command.d.ts.map

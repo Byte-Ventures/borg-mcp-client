@@ -394,7 +394,7 @@ async function main() {
       process.exit(1);
     }
     process.exit(await runLaunchSeat(
-      { target: parsed.target, ...(parsed.cube ? { cube: parsed.cube } : {}), ...(parsed.cli ? { cli: parsed.cli } : {}) },
+      { target: parsed.target, ...(parsed.cube ? { cube: parsed.cube } : {}), ...(parsed.cli ? { cli: parsed.cli } : {}), ...(parsed.force ? { force: true } : {}) },
       buildDefaultSeatCommandDeps(),
     ));
   }

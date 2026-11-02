@@ -124,6 +124,30 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     }
   });
 
+  it.each(['claude', 'codex', 'opencode'] as const)('carries force and %s through every backend, including the human-seat split', async (cli) => {
+    for (const mode of [undefined, 'tmux', 'terminals', 'pastelist'] as const) {
+      const { paths, identities } = fleet(2);
+      identities[1].cube.isHumanSeat = true;
+      const commands: string[] = [];
+      const deps = makeTmuxFleetDeps(paths, identities, {
+        isTTY: vi.fn(() => true), pathExists: vi.fn(() => true),
+        runSync: vi.fn((cmd: string, args: string[]) => {
+          if (cmd === 'git') return porcelainFor(paths);
+          if (cmd === 'tmux' && (args[0] === 'new-session' || args[0] === 'new-window')) return '@7\n';
+          if (cmd === 'tmux' && args[0] === 'send-keys') commands.push(args[3]);
+          if (cmd === 'osascript') commands.push(args[1]);
+          return '';
+        }),
+      });
+      expect(await runLaunchAll({ cubeName: 'myrepo', flags: { cli, force: true, mode, noAttach: true } }, deps, OPTS)).toBe(0);
+      if (mode === 'pastelist') commands.push(stdoutOf(deps));
+      expect(commands.length).toBeGreaterThan(0);
+      for (const command of commands) {
+        expect(command).toContain(`--cli '${cli}' --force`);
+      }
+    }
+  });
+
   it('can preview and print a CLI that is not installed, without changing preferences', async () => {
     for (const flags of [{ cli: 'opencode', dryRun: true }, { cli: 'opencode', mode: 'pastelist' }] as const) {
       const { paths, identities } = fleet(2);
@@ -450,7 +474,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     expect(stdoutOf(deps)).not.toContain('launched');
   });
 
-  it('roster reconcile: seen_since true → VERIFIED in summary', async () => {
+  it('roster reconcile: old-session roster activity never claims the requested CLI started', async () => {
     const { paths, identities } = fleet(1);
     identities[0].cube.serverTrustIdentity = 'spki-sha256:local-server';
     const deps = makeStubDeps({
@@ -459,8 +483,10 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
       readAllProjectIdentities: vi.fn(async () => identities),
       getRoster: vi.fn(async () => ({ drones: [{ id: did(1), seen_since: true }] })),
     });
-    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
-    expect(stdoutOf(deps)).toContain('VERIFIED');
+    expect(await runLaunchAll({ flags: { cli: 'codex' } }, deps, OPTS)).toBe(0);
+    expect(stdoutOf(deps)).toContain('using codex');
+    expect(stdoutOf(deps)).toContain('roster activity seen (new session startup unconfirmed)');
+    expect(stdoutOf(deps)).not.toContain('VERIFIED');
     expect(deps.getRoster).toHaveBeenCalledWith(
       identities[0].cube,
       '2026-06-13T12:00:00.000Z',
@@ -746,7 +772,7 @@ describe('default batch destinations', () => {
     );
     expect(sleep.mock.calls.filter((c: any[]) => c[0] === 2000)).toHaveLength(2);
     expect(deps.getRoster).toHaveBeenCalledWith(identities[0].cube, OPTS.nowISO());
-    expect(stdoutOf(deps)).toContain('launched 3 drones');
+    expect(stdoutOf(deps)).toContain('sent launch commands for 3 of 3 drone(s)');
     for (const { cube } of identities) expect(stdoutOf(deps)).toContain(cube.droneLabel);
   });
 
@@ -865,7 +891,7 @@ describe('default batch destinations', () => {
       targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
     })).toBe(0);
     expect(backendLaunchOrder(deps)).toEqual(['drone-2', 'drone-3']);
-    expect(stdoutOf(deps)).toContain('launched 3 drones');
+    expect(stdoutOf(deps)).toContain('sent launch commands for 3 of 3 drone(s)');
   });
 
   it('human-only batches do not create or attach to an empty tmux session', async () => {

@@ -34,7 +34,7 @@ export interface SeatCommandDeps {
   realpath: (path: string) => string;
   /** Run this same borg executable with an optional CLI choice from the selected worktree,
    * carrying only the expected durable identity for child-side verification. */
-  launchBareBorg: (worktree: string, expectation: LaunchSeatExpectation, cli?: BorgCli) => Promise<number>;
+  launchBareBorg: (worktree: string, expectation: LaunchSeatExpectation, cli?: BorgCli, force?: boolean) => Promise<number>;
   stdout: (line: string) => void;
   stderr: (line: string) => void;
 }
@@ -48,16 +48,21 @@ export function parseSeatsArgs(args: readonly string[]): ParsedSeatsArgs {
 }
 
 export type ParsedLaunchSeatArgs =
-  | { ok: true; target: string; cube?: string; cli?: BorgCli }
+  | { ok: true; target: string; cube?: string; cli?: BorgCli; force?: boolean }
   | { ok: false; error: string };
 
 export function parseLaunchSeatArgs(args: readonly string[]): ParsedLaunchSeatArgs {
   let target: string | undefined;
   let cube: string | undefined;
   let cli: BorgCli | undefined;
+  let force = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    if (arg === '--force') {
+      force = true;
+      continue;
+    }
     if (arg === '--cli' || arg.startsWith('--cli=')) {
       const value = arg === '--cli' ? args[++i] : arg.slice('--cli='.length);
       if (value !== 'claude' && value !== 'codex' && value !== 'opencode') {
@@ -89,7 +94,7 @@ export function parseLaunchSeatArgs(args: readonly string[]): ParsedLaunchSeatAr
   }
 
   if (!target) return { ok: false, error: 'requires a drone label or id prefix' };
-  return { ok: true, target, ...(cube ? { cube } : {}), ...(cli ? { cli } : {}) };
+  return { ok: true, target, ...(cube ? { cube } : {}), ...(cli ? { cli } : {}), ...(force ? { force: true } : {}) };
 }
 
 function safeRealpath(deps: SeatCommandDeps, path: string): string | null {
@@ -191,7 +196,7 @@ export async function runSeats(deps: SeatCommandDeps): Promise<number> {
 }
 
 export async function runLaunchSeat(
-  args: { target: string; cube?: string; cli?: BorgCli },
+  args: { target: string; cube?: string; cli?: BorgCli; force?: boolean },
   deps: SeatCommandDeps,
 ): Promise<number> {
   let rows: LocalSeatRow[];
@@ -300,6 +305,9 @@ export async function runLaunchSeat(
   };
 
   try {
+    if (args.force) {
+      return await deps.launchBareBorg(selected.canonicalWorktree, expectation, args.cli, true);
+    }
     return await deps.launchBareBorg(selected.canonicalWorktree, expectation, ...(args.cli ? [args.cli] : []));
   } catch (error) {
     deps.stderr(`borg launch: failed to start borg in ${selected.canonicalWorktree}: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -315,8 +323,11 @@ export function buildDefaultSeatCommandDeps(): SeatCommandDeps {
     getProjectCliPreference: getProjectCliPreferenceForPath,
     pathExists: existsSync,
     realpath: realpathSync,
-    launchBareBorg: (worktree, expectation, cli) => new Promise((resolve, reject) => {
-      const child = spawn(resolveBorgPath(), cli ? ['--cli', cli] : [], {
+    launchBareBorg: (worktree, expectation, cli, force) => new Promise((resolve, reject) => {
+      const child = spawn(resolveBorgPath(), [
+        ...(cli ? ['--cli', cli] : []),
+        ...(force ? ['--force'] : []),
+      ], {
         cwd: worktree,
         stdio: 'inherit',
         shell: false,

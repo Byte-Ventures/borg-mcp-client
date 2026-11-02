@@ -5,6 +5,7 @@ export interface TmuxOpts {
     sessionName: string;
     borgPath: string;
     cli?: BorgCli;
+    force?: boolean;
     /** 'attach' = attach-session; 'switch' = switch-client (nested tmux); 'none' = skip. */
     attachMode: 'attach' | 'switch' | 'none';
     /** ISO-8601 captured before the first send-keys (lock-marker launchedAt). */

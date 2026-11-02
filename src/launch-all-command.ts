@@ -24,12 +24,13 @@ export function resolveBorgPath(): string {
 export function buildLaunchCommand(
   candidate: { worktreeDir: string; droneId: string },
   borgPath: string,
-  opts: { keepOpenOnFail?: boolean; cli?: BorgCli } = {}
+  opts: { keepOpenOnFail?: boolean; cli?: BorgCli; force?: boolean } = {}
 ): string {
   const base =
     `cd ${shellEscape(candidate.worktreeDir)} && ` +
     `${shellEscape(borgPath)} launch ${shellEscape(candidate.droneId)}` +
-    (opts.cli ? ` --cli ${shellEscape(opts.cli)}` : '');
+    (opts.cli ? ` --cli ${shellEscape(opts.cli)}` : '') +
+    (opts.force ? ' --force' : '');
   if (opts.keepOpenOnFail) {
     return `${base} || { echo "borg launch failed — press Enter to close"; read _; }`;
   }

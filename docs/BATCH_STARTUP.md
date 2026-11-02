@@ -15,11 +15,27 @@ only when those commands are run. For one drone, use
 If the requested CLI is not installed, the batch stops before opening windows or
 marking drones as launched. Preview and printed commands still work without it.
 
+Existing windows stay open. An explicit CLI choice applies to new launches;
+it does not switch an already running session. Borg skips worktrees with launch
+markers up to five minutes old. After they expire, another session may start
+even without `--force`; Codex has no inbox-monitor guard. Stop existing sessions
+before relaunching or switching CLIs. `--force` overrides marker and inbox-monitor
+checks in the batch and its child launchers and can create duplicate sessions.
+For one drone, the override is `borg launch <drone-label-or-id-prefix> --cli codex --force`.
+
+The summary counts launch commands sent. Recent roster activity can come from
+an older session for the same drone, so it does not confirm that the new CLI
+finished starting. Check each new window for errors or prompts. Codex may ask
+you to trust a worktree before it starts the agent.
+
 By default, non-human-seat drones run in one `borg-<cube>` tmux session, with
-one window per drone. The human-seat drone opens in its own terminal. This
-also applies when `borg quickstart` launches a roster. Drones whose human-seat
-identity cannot be confirmed by the server open in terminals too; saved role
-metadata is not used after a failed check.
+one window per drone. Closing the terminal that displays tmux detaches from
+that session; its drones keep running. To reattach, copy the exact
+`tmux attach -t ...` command printed by `borg launch-all`; the session name may
+differ from the cube's display name. The human-seat drone opens in its own
+terminal. This also applies when `borg quickstart` launches a roster. Drones
+whose human-seat identity cannot be confirmed by the server open in terminals
+too; saved role metadata is not used after a failed check.
 
 If tmux is missing, Borg uses terminals for the entire batch and prints tmux
 installation guidance. If a required terminal is unavailable, Borg prints
