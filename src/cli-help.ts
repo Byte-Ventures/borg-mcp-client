@@ -51,8 +51,9 @@ export function launchAllHelpText(version: string): string {
     `--mode pastelist do not change saved choices.\n` +
     `Existing windows stay open. Borg skips worktrees with launch markers up to\n` +
     `five minutes old. After they expire, another session may start even without\n` +
-    `--force; Codex has no inbox-monitor guard. Stop existing sessions before\n` +
-    `relaunching or switching CLIs. --force bypasses marker and inbox-monitor\n` +
+    `--force. Codex sessions do not create an inbox monitor, though a monitor\n` +
+    `left by an older session can still block a launch. Stop existing sessions\n` +
+    `before relaunching or switching CLIs. --force bypasses marker and inbox-monitor\n` +
     `checks. Check new windows for startup errors or trust prompts.\n\n` +
     `Modes:\n` +
     `  terminals  Open each drone in its own terminal tab, with the drone's name as\n` +
