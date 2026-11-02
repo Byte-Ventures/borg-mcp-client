@@ -18,7 +18,8 @@ marking drones as launched. Preview and printed commands still work without it.
 Existing windows stay open. An explicit CLI choice applies to new launches;
 it does not switch an already running session. Borg skips worktrees with launch
 markers up to five minutes old. After they expire, another session may start
-even without `--force`; Codex has no inbox-monitor guard. Stop existing sessions
+even without `--force`. Codex sessions do not create an inbox monitor, though a
+monitor left by an older session can still block a launch. Stop existing sessions
 before relaunching or switching CLIs. `--force` overrides marker and inbox-monitor
 checks in the batch and its child launchers and can create duplicate sessions.
 For one drone, the override is `borg launch <drone-label-or-id-prefix> --cli codex --force`.
