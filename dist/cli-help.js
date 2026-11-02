@@ -41,9 +41,11 @@ export function launchAllHelpText(version) {
         `CLI choice: without --cli, each worktree uses its saved choice. An explicit\n` +
         `choice is remembered in each worktree when its drone starts. --dry-run and\n` +
         `--mode pastelist do not change saved choices.\n` +
-        `Existing windows stay open. Running drones are skipped; stop their sessions\n` +
-        `before switching CLIs. --force bypasses live-session checks and can create\n` +
-        `duplicate sessions. Check new windows for startup errors or trust prompts.\n\n` +
+        `Existing windows stay open. Borg skips worktrees with launch markers up to\n` +
+        `five minutes old. After they expire, another session may start even without\n` +
+        `--force; Codex has no inbox-monitor guard. Stop existing sessions before\n` +
+        `relaunching or switching CLIs. --force bypasses marker and inbox-monitor\n` +
+        `checks. Check new windows for startup errors or trust prompts.\n\n` +
         `Modes:\n` +
         `  terminals  Open each drone in its own terminal tab, with the drone's name as\n` +
         `             the tab title. Terminal.app opens one named window for each drone\n` +
