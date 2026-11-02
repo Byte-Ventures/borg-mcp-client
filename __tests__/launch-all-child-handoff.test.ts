@@ -62,8 +62,10 @@ process.exit(23);
       runSync: (cmd: string, args: string[]) => {
         if (cmd === 'git') return execFileSync(cmd, args, { cwd: repo, encoding: 'utf8' });
         if (cmd === 'tmux' && (args[0] === 'new-session' || args[0] === 'new-window')) return '@7\n';
+        // Keep escaped characters and ordinary characters disjoint so an
+        // unterminated string cannot cause exponential backtracking.
         const terminalCommand = cmd === 'osascript'
-          ? args[1].match(/set launchedTab to do script ("(?:\\.|[^"])*")/)?.[1]
+          ? args[1].match(/set launchedTab to do script ("(?:\\.|[^"\\])*")/)?.[1]
           : undefined;
         const command = terminalCommand ? JSON.parse(terminalCommand)
           : cmd === 'tmux' && args[0] === 'send-keys' ? args[3] : undefined;
