@@ -4,7 +4,7 @@ export type ToolPolicyHost = 'claude' | 'codex' | 'opencode';
 
 export class ToolNameMigrationError extends Error {
   constructor(host: ToolPolicyHost, detail: string) {
-    super(`${host} Borg tool-name migration required: ${detail} Update tool-specific permissions and enabled/disabled tool lists to the underscore names, preserving each rule's scope, action and order, then relaunch. See docs/TOOL_NAME_MIGRATION.md. No launch-only approval override was applied.`);
+    super(`${host} Borg tool-name migration required: ${detail} Cover both canonical and legacy names in tool-specific policies, preserving each rule's scope, action and order, then relaunch. See docs/TOOL_NAME_MIGRATION.md. No launch-only approval override was applied.`);
     this.name = 'ToolNameMigrationError';
   }
 }
@@ -27,35 +27,78 @@ function matches(pattern: string, value: string): boolean {
   return new RegExp(`^${escaped}$`, process.platform === 'win32' ? 'i' : '').test(value);
 }
 
-/** A rename must never silently unmatch a host-side restriction. Inspect raw
- * sources too: an effective merge can hide a managed rule or an agent policy.
- * Do not translate arbitrary globs, reorder rules, or edit operator settings. */
+/** Permission selectors need both spellings while hidden aliases are callable. */
+export function toolPolicySpellings(host: ToolPolicyHost, name: string): string[] {
+  for (const [legacy, canonical] of Object.entries(LEGACY_TOOL_ALIASES)) {
+    const oldNames = spellings(host, legacy), newNames = spellings(host, canonical);
+    const index = newNames.indexOf(name);
+    if (index !== -1) return [name, oldNames[index]];
+  }
+  return [name];
+}
+
+/** Inspect without rewriting. Exact pairs must be adjacent with identical
+ * scope/effect; arbitrary globs must already match both names. This keeps
+ * ordered policy semantics and cannot broaden a glob by guessing its rewrite. */
 export function assertToolNamePoliciesMigrated(host: ToolPolicyHost, config: unknown): void {
-  const check = (selector: string) => {
-    // Claude input specifiers do not affect matching the tool-name position.
-    const pattern = host === 'claude' ? selector.split('(')[0]
-      : host === 'opencode' ? selector.split(':')[0] : selector;
+  const patternOf = (selector: string) => host === 'claude' ? selector.split('(')[0]
+    : host === 'opencode' ? selector.split(':')[0] : selector;
+  const counterpart = (selector: string): string | undefined => {
+    const pattern = patternOf(selector);
     for (const [legacy, canonical] of Object.entries(LEGACY_TOOL_ALIASES)) {
-      const oldNames = spellings(host, legacy);
-      const newNames = spellings(host, canonical);
-      if (oldNames.some((oldName, index) => matches(pattern, oldName) && !matches(pattern, newNames[index]))) {
-        // Static identifiers only: policies can contain credentials or inputs.
-        throw new ToolNameMigrationError(host, `a policy still selects ${oldNames[0]} instead of ${newNames[0]}.`);
+      const oldNames = spellings(host, legacy), newNames = spellings(host, canonical);
+      const index = oldNames.indexOf(pattern), reverse = newNames.indexOf(pattern);
+      if (index !== -1) return newNames[index] + selector.slice(pattern.length);
+      if (reverse !== -1) return oldNames[reverse] + selector.slice(pattern.length);
+    }
+    return undefined;
+  };
+  const canonicalSelector = (selector: string): string => {
+    const pattern = patternOf(selector);
+    for (const [legacy, canonical] of Object.entries(LEGACY_TOOL_ALIASES)) {
+      const oldNames = spellings(host, legacy), newNames = spellings(host, canonical);
+      const index = oldNames.indexOf(pattern);
+      if (index !== -1) return newNames[index] + selector.slice(pattern.length);
+    }
+    return selector;
+  };
+  // Rule comparisons normalize selector fields only, never an input/resource
+  // value that merely mentions a tool, and never mutate the inspected source.
+  const comparableRule = (value: unknown): string => JSON.stringify(value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key,
+      (key === 'action' || (key === 'resource' && (value as Record<string, unknown>).action === 'tool.use')) && typeof entry === 'string'
+        ? canonicalSelector(entry) : entry])) : value);
+  const check = (selector: string, peers: unknown[]) => {
+    const pattern = patternOf(selector);
+    for (const [legacy, canonical] of Object.entries(LEGACY_TOOL_ALIASES)) {
+      const oldNames = spellings(host, legacy), newNames = spellings(host, canonical);
+      if (oldNames.some((oldName, index) => matches(pattern, oldName) !== matches(pattern, newNames[index]))) {
+        const paired = counterpart(selector);
+        if (paired !== undefined && peers.includes(paired)) continue;
+        throw new ToolNameMigrationError(host, `a policy does not cover both ${oldNames[0]} and ${newNames[0]} equivalently.`);
       }
     }
     if ((host === 'codex' || pattern.includes('borg') || pattern.startsWith('*')) && /[\[\]{}]/.test(pattern)) {
-      throw new ToolNameMigrationError(host, 'a Borg tool selector uses unsupported pattern syntax; replace it with explicit canonical tool names.');
+      throw new ToolNameMigrationError(host, 'a Borg tool selector uses unsupported pattern syntax; use adjacent exact canonical/legacy pairs.');
     }
   };
-  const visit = (value: unknown, policy: boolean) => {
-    if (typeof value === 'string') { if (policy) check(value); return; }
-    if (Array.isArray(value)) { for (const entry of value) visit(entry, policy); return; }
-    if (!value || typeof value !== 'object') return;
-    for (const [key, entry] of Object.entries(value)) {
-      if (policy) check(key);
-      // Only policy fields are selectors; env, descriptions and tool inputs are not.
-      visit(entry, policy || POLICY_FIELDS.has(key));
+  const visit = (value: unknown, policy: boolean, peers: unknown[] = []) => {
+    if (typeof value === 'string') { if (policy) check(value, peers); return; }
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => visit(entry, policy, [value[index - 1], value[index + 1]]));
+      return;
     }
+    if (!value || typeof value !== 'object') return;
+    const entries = Object.entries(value);
+    entries.forEach(([key, entry], index) => {
+      // Ordinary permission resources are paths/commands, not tool selectors.
+      if (key === 'resource' && (value as Record<string, unknown>).action !== 'tool.use') return;
+      if (policy) check(key, [entries[index - 1], entries[index + 1]]
+        .filter(neighbor => neighbor && comparableRule(neighbor[1]) === comparableRule(entry)).map(neighbor => neighbor[0]));
+      const pairedEntries = peers.filter(peer => comparableRule(peer) === comparableRule(value))
+        .map(peer => peer && typeof peer === 'object' ? (peer as Record<string, unknown>)[key] : undefined);
+      visit(entry, policy || POLICY_FIELDS.has(key), pairedEntries);
+    });
   };
   visit(config, false);
 }

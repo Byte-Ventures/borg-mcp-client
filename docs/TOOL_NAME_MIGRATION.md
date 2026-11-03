@@ -7,13 +7,17 @@ unchanged. This catalog change requires a client major release.
 
 ## Before upgrading
 
-1. Update tool-specific allow, ask and deny rules, enabled/disabled tool lists,
-   agent policies and managed policies. Keep each rule's action, resource scope
-   and order. Generic server-wide patterns that match both spellings can stay.
+1. Keep each legacy rule and add its canonical counterpart immediately beside it
+   in tool-specific allow, ask and deny rules, enabled/disabled tool lists, agent
+   policies and managed policies. Both entries must have the same action and
+   resource scope. Keep their position relative to other rules. Generic patterns
+   that match both spellings can stay. Do not replace a legacy restriction with
+   a canonical-only restriction while aliases remain callable.
 2. Upgrade the client and restart or reconnect its MCP servers. Force tool
    rediscovery in the host so cached declarations use the new catalog.
-3. Update scripts and operator-maintained roles when convenient. Borg does not
-   rewrite saved roles, messages, logs or historical release documents.
+3. Update scripts and operator-maintained roles when convenient. Reinstall the
+   bundled Hermes plugin so its calls use the canonical representative names.
+   Borg does not rewrite saved roles, messages, logs or historical release documents.
 
 For the default server name `borg`, host policy identifiers include:
 
@@ -24,6 +28,7 @@ For the default server name `borg`, host policy identifiers include:
 | Codex enabled/disabled tools | `borg_read-log` | `borg_read_log` |
 | OpenCode 1 or 2 | `borg_borg_read-log` | `borg_borg_read_log` |
 
+The table shows each pair: retain both selectors with identical restrictions.
 Use the identifiers your installed host reports. A custom MCP server name changes
 its host prefix. Review globs against the complete alias table below; replacing a
 glob without checking its match set can broaden or narrow a policy.
@@ -33,11 +38,12 @@ approval overrides. Claude uses the native `get_settings` control request,
 including per-source managed settings; a CLI without that capability is refused.
 Codex uses its native effective configuration and selected profile. OpenCode 1
 uses its effective config, and OpenCode 2 checks native config sources, effective
-agent rules and session rules before updating session permissions. A legacy
-selector whose match would change stops the launch with migration instructions.
+agent rules and session rules before updating session permissions. An exact selector without an adjacent equivalent counterpart, or a glob whose
+match changes between spellings, stops launch with migration instructions.
 Unavailable effective configuration also stops launch. The approval opt-out flag
 `--no-borg-approval-override` does not bypass migration checks. Borg does not edit
-these settings or automatically translate policy globs.
+these settings or automatically translate policy globs. Its own launch-only
+approval additions cover canonical and legacy spellings equally.
 
 These checks inspect the policies the installed host exposes at launch. Generic
 MCP hosts, including hosts of the representative facade, must migrate their own

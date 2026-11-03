@@ -3,7 +3,7 @@ import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from './guarded-fs.js'
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { borgHomeRoot } from './private-root.js';
-import { assertToolNamePoliciesMigrated, ToolNameMigrationError } from './tool-name-migration.js';
+import { assertToolNamePoliciesMigrated, ToolNameMigrationError, toolPolicySpellings } from './tool-name-migration.js';
 import { claudeToolPolicyArgs, readClaudeEffectiveSettings } from './claude-effective-settings.js';
 /**
  * Client #20: the narrow coordination surface a borg-launched agent needs
@@ -63,13 +63,16 @@ function parseCodexModes(text) {
 }
 export function codexApprovalRepairSnippet(tools = CODEX_BORG_COORDINATION_TOOLS) {
     return tools
+        .flatMap(tool => toolPolicySpellings('codex', tool))
         .map((tool) => `[mcp_servers.borg.tools."${tool}"]\n` +
         `approval_mode = "auto"`)
         .join('\n\n');
 }
 export function inspectCodexBorgApprovals(config) {
     const policy = typeof config === 'string'
-        ? config.match(/["']([^"'\r\n]*)["']/g)?.map(value => value.slice(1, -1))
+        ? { tools: Object.fromEntries(parseCodexModes(config).toolModes),
+            ...Object.fromEntries([...config.matchAll(/\b(enabled_tools|disabled_tools)\s*=\s*\[([^\]]*)\]/g)]
+                .map(([, key, list]) => [key, [...list.matchAll(/["']([^"']*)["']/g)].map(([, name]) => name)])) }
         : borgConfigFragment(config);
     assertToolNamePoliciesMigrated('codex', { tools: policy });
     let defaultMode;
@@ -124,7 +127,7 @@ function effectiveOpenCodePermission(permission, tool) {
     return result;
 }
 export function openCodeApprovalRepairObject(tools = OPENCODE_BORG_COORDINATION_TOOLS) {
-    return Object.fromEntries(tools.map((tool) => [tool, 'allow']));
+    return Object.fromEntries(tools.flatMap(tool => toolPolicySpellings('opencode', tool)).map((tool) => [tool, 'allow']));
 }
 /** Preserve every existing OpenCode permission rule, then append the exact
  * Borg coordination allows. This remains safe whether OPENCODE_PERMISSION is
@@ -140,7 +143,7 @@ export function mergeOpenCodePermission(permission, tools = OPENCODE_BORG_COORDI
     // Reinsert exact keys at the END. OpenCode resolves matching permission
     // patterns in order, so merely overwriting an earlier exact key would keep
     // its old insertion position and a later wildcard could still win.
-    const toolSet = new Set(tools);
+    const toolSet = new Set(tools.flatMap(tool => toolPolicySpellings('opencode', tool)));
     const preserved = Object.fromEntries(Object.entries(existing).filter(([key]) => !toolSet.has(key)));
     return { ...preserved, ...openCodeApprovalRepairObject(tools) };
 }
@@ -166,6 +169,7 @@ export function codexBorgApprovalArgs(tools = CODEX_BORG_COORDINATION_TOOLS) {
     // supported way to address colon-named tools and deep-merges with the
     // remaining effective tool config.
     const toolTable = tools
+        .flatMap(tool => toolPolicySpellings('codex', tool))
         .map((tool) => `${JSON.stringify(tool)}={approval_mode="auto"}`)
         .join(',');
     return ['-c', `mcp_servers.borg.tools={${toolTable}}`];
@@ -501,10 +505,15 @@ export async function resolveLaunchBorgApprovals(cli, io, options = {}) {
     let openCodeConfig;
     try {
         if (cli === 'codex') {
-            inspection = inspectCodexBorgApprovals(await io.readCodexConfig());
+            const config = await io.readCodexConfig();
+            if (config === null || config === undefined)
+                throw new Error('Effective config unavailable');
+            inspection = inspectCodexBorgApprovals(config);
         }
         else {
             openCodeConfig = await io.readOpenCodeConfig();
+            if (!openCodeConfig || typeof openCodeConfig !== 'object' || Array.isArray(openCodeConfig))
+                throw new Error('Effective config unavailable');
             inspection = inspectOpenCodeBorgApprovals(openCodeConfig);
         }
     }

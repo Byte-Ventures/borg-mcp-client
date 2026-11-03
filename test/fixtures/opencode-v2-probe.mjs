@@ -357,6 +357,17 @@ try {
       env: { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify(legacyPolicyConfig) },
     }), /tool-name migration required/, 'A legacy hard policy is refused before its target can disappear');
     assert.equal(requests.length, generatedBefore, 'A policy migration refusal never submits a kickoff');
+    legacyPolicyConfig.policies.push({ action: 'tool.use', resource: 'borg_borg_read_log:*', effect: 'deny' });
+    launch = await launchOpenCodeV2Process({ ...launchOptions,
+      env: { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify(legacyPolicyConfig) },
+    });
+    const pairedFilename = readdirSync(openCodePrivateRoot()).find(name => /^opencode-v2-[\w-]{43}\.json$/.test(name));
+    const pairedDescriptor = readOpenCodeV2Descriptor(join(openCodePrivateRoot(), pairedFilename));
+    for (const action of ['borg_borg_read-log', 'borg_borg_read_log']) {
+      assert.equal((await nativeClient.permission.create({ sessionID: pairedDescriptor.sessionID, agent: 'build', action, resources: ['*'] })).effect,
+        'deny', 'Native hard policies retain the same denial for the canonical name and its hidden alias');
+    }
+    tui.kill(); await launch.cleanup(); launch = undefined;
   }
 } catch (error) {
   console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12), nativePlugins, providerSteps: providerSteps.slice(-6) }));
