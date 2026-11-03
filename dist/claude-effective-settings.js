@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 /** Forward only settings-source switches. Passing a prompt, --resume, or a
- * print flag to this probe could start a generation. No initialize/user frame
- * is sent: get_settings reads native merged and per-source policy only. */
+ * print flag to this probe could start a generation. Bare mode suppresses
+ * startup hooks and plugin execution while retaining the
+ * native settings snapshot. No initialize/user frame is sent. */
 export function claudeSettingsArgs(args) {
     const result = [];
     for (let index = 0; index < args.length && args[index] !== '--'; index++) {
@@ -19,14 +20,61 @@ export function claudeSettingsArgs(args) {
     }
     return result;
 }
-/** CLI tool selectors do not necessarily appear in get_settings. Inspect only
- * their flags, never a prompt or unrelated argument that mentions a tool. */
-export function claudeToolPolicyArgs(args) {
+/** Split selector lists while preserving tool input specifiers. */
+export function splitClaudeToolSelectors(value) {
     const selectors = [];
-    const flags = new Set(['--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--tools']);
+    let token = '', depth = 0, quote = '', escaped = false;
+    for (const character of value) {
+        if (escaped) {
+            token += character;
+            escaped = false;
+            continue;
+        }
+        if (character === '\\') {
+            token += character;
+            escaped = true;
+            continue;
+        }
+        if (quote) {
+            token += character;
+            if (character === quote)
+                quote = '';
+            continue;
+        }
+        if (depth && (character === '"' || character === "'")) {
+            token += character;
+            quote = character;
+            continue;
+        }
+        if (character === '(')
+            depth++;
+        if (character === ')')
+            depth--;
+        if (!depth && /[\s,]/.test(character)) {
+            if (token)
+                selectors.push(token);
+            token = '';
+        }
+        else
+            token += character;
+    }
+    if (depth || quote || escaped)
+        throw new Error('Claude tool selector could not be inspected');
+    if (token)
+        selectors.push(token);
+    return selectors;
+}
+/** Keep each CLI flag's effect and occurrence separate. A deny selector can
+ * never supply the missing counterpart for an allow or availability selector. */
+export function claudeToolPolicyArgs(args) {
+    const policies = [];
+    const flags = {
+        '--allowedTools': 'allow', '--allowed-tools': 'allow',
+        '--disallowedTools': 'deny', '--disallowed-tools': 'deny', '--tools': 'tools',
+    };
     for (let index = 0; index < args.length && args[index] !== '--'; index++) {
         const [flag, inline] = args[index].split(/=(.*)/s);
-        if (!flags.has(flag))
+        if (!Object.hasOwn(flags, flag))
             continue;
         const values = [];
         if (inline !== undefined)
@@ -34,56 +82,16 @@ export function claudeToolPolicyArgs(args) {
         else
             while (index + 1 < args.length && !args[index + 1].startsWith('-'))
                 values.push(args[++index]);
-        for (const value of values) {
-            let token = '', depth = 0, quote = '', escaped = false;
-            for (const character of value) {
-                if (escaped) {
-                    token += character;
-                    escaped = false;
-                    continue;
-                }
-                if (character === '\\') {
-                    token += character;
-                    escaped = true;
-                    continue;
-                }
-                if (quote) {
-                    token += character;
-                    if (character === quote)
-                        quote = '';
-                    continue;
-                }
-                if (depth && (character === '"' || character === "'")) {
-                    token += character;
-                    quote = character;
-                    continue;
-                }
-                if (character === '(')
-                    depth++;
-                if (character === ')')
-                    depth--;
-                if (!depth && /[\s,]/.test(character)) {
-                    if (token)
-                        selectors.push(token);
-                    token = '';
-                }
-                else
-                    token += character;
-            }
-            if (depth || quote || escaped)
-                throw new Error('Claude tool selector could not be inspected');
-            if (token)
-                selectors.push(token);
-        }
+        policies.push({ [flags[flag]]: values.flatMap(splitClaudeToolSelectors) });
     }
-    return selectors;
+    return policies;
 }
 export async function readClaudeEffectiveSettings(args, cwd, env, runtime = {}) {
     const selected = claudeSettingsArgs(args);
     return new Promise((resolve, reject) => {
         let child;
         try {
-            child = (runtime.spawnProcess ?? spawn)('claude', [...selected, '--print', '--input-format', 'stream-json',
+            child = (runtime.spawnProcess ?? spawn)('claude', [...selected, '--bare', '--print', '--input-format', 'stream-json',
                 '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--strict-mcp-config'], { cwd, env, stdio: ['pipe', 'pipe', 'ignore'] });
         }
         catch {

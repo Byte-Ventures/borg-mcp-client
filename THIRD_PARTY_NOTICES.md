@@ -8,3 +8,4 @@
 | @opencode/protocol | 2.1.2 | MIT |
 | effect | 4.0.1 | MIT |
 | jsonc-parser | 3.3.1 | MIT |
+| yaml | 2.9.1 | ISC |

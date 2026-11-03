@@ -59,6 +59,23 @@ describe('host-side policy migration', () => {
   ] as const)('accepts adjacent equivalent %s policies for both spellings', (host, config) => {
     expect(() => assertToolNamePoliciesMigrated(host, config)).not.toThrow();
   });
+  it('does not require Codex map or Claude set adjacency', () => {
+    const entries = [
+      ['borg:create-cube', { approval_mode: 'approve' }], ['borg:create_cube', { approval_mode: 'approve' }],
+      ['borg:create-role', { approval_mode: 'auto' }], ['borg:create_role', { approval_mode: 'auto' }],
+    ] as const;
+    const permutations = <T,>(values: T[]): T[][] => values.length ? values.flatMap((value, index) =>
+      permutations(values.filter((_, peer) => peer !== index)).map(rest => [value, ...rest])) : [[]];
+    for (const order of permutations([...entries])) {
+      expect(() => assertToolNamePoliciesMigrated('codex', { tools: Object.fromEntries(order) })).not.toThrow();
+    }
+    expect(() => assertToolNamePoliciesMigrated('claude', { permissions: { deny: [
+      'mcp__borg__borg_remove-document', 'Bash', 'mcp__borg__borg_remove_document',
+    ] } })).not.toThrow();
+    expect(() => assertToolNamePoliciesMigrated('codex', { tools: {
+      'borg:create-cube': { approval_mode: 'approve' }, 'borg:create_cube': { approval_mode: 'auto' },
+    } })).toThrow(ToolNameMigrationError);
+  });
   it('refuses mismatched effects, resources, order and guessed glob rewrites', () => {
     for (const permissions of [
       [{ action: 'borg_borg_read-log', resource: '*', effect: 'deny' }, { action: 'borg_borg_read_log', resource: '*', effect: 'allow' }],

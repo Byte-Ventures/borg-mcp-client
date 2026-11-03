@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { BorgCli } from './cubes.js';
+import { readClaudeEffectiveSettings } from './claude-effective-settings.js';
 export declare const BORG_COORDINATION_TOOLS: string[];
 export declare const CODEX_BORG_COORDINATION_TOOLS: string[];
 export declare const OPENCODE_BORG_COORDINATION_TOOLS: string[];
@@ -36,6 +37,7 @@ export interface EffectiveConfigOptions {
     /** User-selected Codex profile/config flags, in their launch precedence. */
     codexArgs: string[];
     claudeArgs?: string[];
+    loadClaude?: typeof readClaudeEffectiveSettings;
     loadCodex?: (args: string[], cwd: string, env: NodeJS.ProcessEnv, profile?: string) => Promise<unknown>;
     loadOpenCode?: (cwd: string, env: NodeJS.ProcessEnv) => Promise<unknown> | unknown;
 }

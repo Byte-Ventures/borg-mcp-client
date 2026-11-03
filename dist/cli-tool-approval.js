@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { borgHomeRoot } from './private-root.js';
 import { assertToolNamePoliciesMigrated, ToolNameMigrationError, toolPolicySpellings } from './tool-name-migration.js';
 import { claudeToolPolicyArgs, readClaudeEffectiveSettings } from './claude-effective-settings.js';
+import { inspectClaudePolicySources } from './claude-policy-sources.js';
 /**
  * Client #20: the narrow coordination surface a borg-launched agent needs
  * without an approval round-trip. Keep the direct-tool list deliberately
@@ -465,11 +466,14 @@ export function defaultApprovalIo(confirm, isTTY, options = {}) {
     const selectedCodexProfile = codexSelectedProfile(options.codexArgs ?? []);
     const loadCodex = options.loadCodex ?? ((args, loadCwd, loadEnv, profile) => readCodexEffectiveConfig(args, loadCwd, loadEnv, { profile }));
     const loadOpenCode = options.loadOpenCode ?? readOpenCodeEffectiveConfig;
+    const loadClaude = options.loadClaude ?? readClaudeEffectiveSettings;
     return {
-        readClaudeConfig: () => {
+        readClaudeConfig: async () => {
             const args = options.claudeArgs ?? [];
             assertToolNamePoliciesMigrated('claude', { permissions: claudeToolPolicyArgs(args) });
-            return readClaudeEffectiveSettings(args, cwd, env);
+            const settings = await loadClaude(args, cwd, env);
+            inspectClaudePolicySources(args, cwd, env, settings);
+            return settings;
         },
         readCodexConfig: (approvalArgs = []) => {
             const args = [...approvalArgs, ...selectedCodexArgs];

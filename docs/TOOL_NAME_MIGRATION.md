@@ -7,10 +7,13 @@ unchanged. This catalog change requires a client major release.
 
 ## Before upgrading
 
-1. Keep each legacy rule and add its canonical counterpart immediately beside it
-   in tool-specific allow, ask and deny rules, enabled/disabled tool lists, agent
-   policies and managed policies. Both entries must have the same action and
-   resource scope. Keep their position relative to other rules. Generic patterns
+1. Keep each legacy rule and add its canonical counterpart in tool-specific
+   allow, ask and deny rules, enabled/disabled tool lists, agent policies and
+   managed policies. Both entries must have the same action and resource scope.
+   OpenCode rules are ordered: keep each pair adjacent and preserve its position
+   relative to other rules. Codex tables and Claude selector sets are unordered.
+   In Claude CLI flags, put both spellings in the same flag occurrence; an allow
+   entry cannot supply a counterpart for a deny or tool-availability entry. Generic patterns
    that match both spellings can stay. Do not replace a legacy restriction with
    a canonical-only restriction while aliases remain callable.
 2. Upgrade the client and restart or reconnect its MCP servers. Force tool
@@ -35,15 +38,28 @@ glob without checking its match set can broaden or narrow a policy.
 
 Borg launches check native effective configuration before applying coordination
 approval overrides. Claude uses the native `get_settings` control request,
-including per-source managed settings; a CLI without that capability is refused.
+including per-source managed settings. The inspection runs in bare mode so it
+does not execute startup/shutdown hooks or activate plugins. A CLI without the
+required native inspection capabilities is refused. Agent, skill and command
+frontmatter, inline `--agents` definitions, and enabled/local plugin definitions
+are read as data using their configured locations. Unavailable or malformed
+definitions stop launch; remote-only plugins must be installed locally first.
 Codex uses its native effective configuration and selected profile. OpenCode 1
 uses its effective config, and OpenCode 2 checks native config sources, effective
-agent rules and session rules before updating session permissions. An exact selector without an adjacent equivalent counterpart, or a glob whose
-match changes between spellings, stops launch with migration instructions.
+agent rules and session rules before updating session permissions. An exact
+selector without an equivalent counterpart, or a glob whose match changes
+between spellings, stops launch with migration instructions. Ordered OpenCode
+rules also require adjacency.
 Unavailable effective configuration also stops launch. The approval opt-out flag
 `--no-borg-approval-override` does not bypass migration checks. Borg does not edit
 these settings or automatically translate policy globs. Its own launch-only
 approval additions cover canonical and legacy spellings equally.
+
+Claude tool hook matchers are regular expressions. Each matcher must cover both
+spellings, for example `^mcp__borg__borg_remove[-_]document$`; two separate hooks
+are not treated as equivalent. Preserve the existing handler. Also review hook
+scripts that inspect tool names internally: Borg checks declared matchers and
+tool conditions, and cannot prove the behavior of arbitrary handler code.
 
 These checks inspect the policies the installed host exposes at launch. Generic
 MCP hosts, including hosts of the representative facade, must migrate their own

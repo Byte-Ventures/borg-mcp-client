@@ -4,9 +4,58 @@ export type ToolPolicyHost = 'claude' | 'codex' | 'opencode';
 
 export class ToolNameMigrationError extends Error {
   constructor(host: ToolPolicyHost, detail: string) {
-    super(`${host} Borg tool-name migration required: ${detail} Cover both canonical and legacy names in tool-specific policies, preserving each rule's scope, action and order, then relaunch. See docs/TOOL_NAME_MIGRATION.md. No launch-only approval override was applied.`);
+    super(`${host} Borg tool-name migration required: ${detail} Cover both canonical and legacy names in tool-specific policies, preserving each rule's scope and action${host === 'opencode' ? ', and keep ordered rule pairs adjacent' : ''}, then relaunch. See docs/TOOL_NAME_MIGRATION.md. No launch-only approval override was applied.`);
     this.name = 'ToolNameMigrationError';
   }
+}
+
+const CLAUDE_TOOL_HOOK_EVENTS = new Set([
+  'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied',
+]);
+
+/** Claude hook matchers are regular expressions, not permission globs. Inspect
+ * each hook independently: two different hooks cannot prove equivalent effects. */
+export function assertClaudeHookPoliciesMigrated(config: unknown): void {
+  const inspectHooks = (hooks: unknown) => {
+    if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) return;
+    for (const [event, entries] of Object.entries(hooks)) {
+      if (!CLAUDE_TOOL_HOOK_EVENTS.has(event) || !Array.isArray(entries)) continue;
+      for (const entry of entries) {
+        if (!entry || typeof entry !== 'object') continue;
+        const matcher = (entry as Record<string, unknown>).matcher;
+        if (matcher !== undefined && matcher !== '' && matcher !== '*') {
+          if (typeof matcher !== 'string') throw new ToolNameMigrationError('claude', 'a tool hook matcher could not be inspected.');
+          let expression: RegExp;
+          try { expression = new RegExp(matcher); }
+          catch { throw new ToolNameMigrationError('claude', 'a tool hook matcher is not a valid regular expression.'); }
+          for (const [legacy, canonical] of Object.entries(LEGACY_TOOL_ALIASES)) {
+            if (expression.test(`mcp__borg__${legacy}`) !== expression.test(`mcp__borg__${canonical}`)) {
+              throw new ToolNameMigrationError('claude', 'a tool hook matcher treats canonical and legacy names differently; update that matcher without changing its handler.');
+            }
+          }
+        }
+        const handlers = (entry as Record<string, unknown>).hooks;
+        if (!Array.isArray(handlers)) continue;
+        for (const handler of handlers) {
+          if (!handler || typeof handler !== 'object' || !('if' in handler)) continue;
+          const conditions = Array.isArray(handler.if) ? handler.if : [handler.if];
+          for (const condition of conditions) {
+            if (typeof condition !== 'string') throw new ToolNameMigrationError('claude', 'a tool hook condition could not be inspected.');
+            assertToolNamePoliciesMigrated('claude', { permissions: [condition] });
+          }
+        }
+      }
+    }
+  };
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    if (!value || typeof value !== 'object') return;
+    for (const [key, entry] of Object.entries(value)) {
+      if (key === 'hooks') inspectHooks(entry);
+      visit(entry);
+    }
+  };
+  visit(config);
 }
 
 const POLICY_FIELDS = new Set([
@@ -37,9 +86,8 @@ export function toolPolicySpellings(host: ToolPolicyHost, name: string): string[
   return [name];
 }
 
-/** Inspect without rewriting. Exact pairs must be adjacent with identical
- * scope/effect; arbitrary globs must already match both names. This keeps
- * ordered policy semantics and cannot broaden a glob by guessing its rewrite. */
+/** Inspect without rewriting. OpenCode's ordered rules need adjacent pairs;
+ * Codex tables and Claude sets have no ordering semantics. */
 export function assertToolNamePoliciesMigrated(host: ToolPolicyHost, config: unknown): void {
   const patternOf = (selector: string) => host === 'claude' ? selector.split('(')[0]
     : host === 'opencode' ? selector.split(':')[0] : selector;
@@ -85,7 +133,8 @@ export function assertToolNamePoliciesMigrated(host: ToolPolicyHost, config: unk
   const visit = (value: unknown, policy: boolean, peers: unknown[] = []) => {
     if (typeof value === 'string') { if (policy) check(value, peers); return; }
     if (Array.isArray(value)) {
-      value.forEach((entry, index) => visit(entry, policy, [value[index - 1], value[index + 1]]));
+      value.forEach((entry, index) => visit(entry, policy, host === 'opencode'
+        ? [value[index - 1], value[index + 1]] : value.filter((_, peerIndex) => peerIndex !== index)));
       return;
     }
     if (!value || typeof value !== 'object') return;
@@ -93,7 +142,8 @@ export function assertToolNamePoliciesMigrated(host: ToolPolicyHost, config: unk
     entries.forEach(([key, entry], index) => {
       // Ordinary permission resources are paths/commands, not tool selectors.
       if (key === 'resource' && (value as Record<string, unknown>).action !== 'tool.use') return;
-      if (policy) check(key, [entries[index - 1], entries[index + 1]]
+      const neighbors = host === 'opencode' ? [entries[index - 1], entries[index + 1]] : entries.filter((_, peerIndex) => peerIndex !== index);
+      if (policy) check(key, neighbors
         .filter(neighbor => neighbor && comparableRule(neighbor[1]) === comparableRule(entry)).map(neighbor => neighbor[0]));
       const pairedEntries = peers.filter(peer => comparableRule(peer) === comparableRule(value))
         .map(peer => peer && typeof peer === 'object' ? (peer as Record<string, unknown>)[key] : undefined);

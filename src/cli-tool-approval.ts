@@ -6,6 +6,7 @@ import type { BorgCli } from './cubes.js';
 import { borgHomeRoot } from './private-root.js';
 import { assertToolNamePoliciesMigrated, ToolNameMigrationError, toolPolicySpellings } from './tool-name-migration.js';
 import { claudeToolPolicyArgs, readClaudeEffectiveSettings } from './claude-effective-settings.js';
+import { inspectClaudePolicySources } from './claude-policy-sources.js';
 import type { CanonicalToolName } from './tool-names.js';
 
 /**
@@ -246,6 +247,7 @@ export interface EffectiveConfigOptions {
   /** User-selected Codex profile/config flags, in their launch precedence. */
   codexArgs: string[];
   claudeArgs?: string[];
+  loadClaude?: typeof readClaudeEffectiveSettings;
   loadCodex?: (
     args: string[],
     cwd: string,
@@ -581,11 +583,14 @@ export function defaultApprovalIo(
       readCodexEffectiveConfig(args, loadCwd, loadEnv, { profile })
   );
   const loadOpenCode = options.loadOpenCode ?? readOpenCodeEffectiveConfig;
+  const loadClaude = options.loadClaude ?? readClaudeEffectiveSettings;
   return {
-    readClaudeConfig: () => {
+    readClaudeConfig: async () => {
       const args = options.claudeArgs ?? [];
       assertToolNamePoliciesMigrated('claude', { permissions: claudeToolPolicyArgs(args) });
-      return readClaudeEffectiveSettings(args, cwd, env);
+      const settings = await loadClaude(args, cwd, env);
+      inspectClaudePolicySources(args, cwd, env, settings);
+      return settings;
     },
     readCodexConfig: (approvalArgs = []) => {
       const args = [...approvalArgs, ...selectedCodexArgs];

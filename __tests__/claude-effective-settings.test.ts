@@ -13,9 +13,9 @@ describe('native Claude policy query', () => {
   it('checks CLI tool selectors without interpreting prompt text as policy', () => {
     expect(claudeToolPolicyArgs(['mention mcp__borg__borg_read-log in the answer'])).toEqual([]);
     expect(claudeToolPolicyArgs(['--disallowedTools=mcp__borg__borg_read-log', '--allowed-tools', 'mcp__borg__borg_stream-status,mcp__borg__borg_log', '--', '--tools=mcp__borg__borg_read-entry']))
-      .toEqual(['mcp__borg__borg_read-log', 'mcp__borg__borg_stream-status', 'mcp__borg__borg_log']);
+      .toEqual([{ deny: ['mcp__borg__borg_read-log'] }, { allow: ['mcp__borg__borg_stream-status', 'mcp__borg__borg_log'] }]);
     expect(claudeToolPolicyArgs(['--disallowedTools', '*read-*', 'Bash(echo mcp__borg__borg_read-log)', '--model', 'x']))
-      .toEqual(['*read-*', 'Bash(echo mcp__borg__borg_read-log)']);
+      .toEqual([{ deny: ['*read-*', 'Bash(echo mcp__borg__borg_read-log)'] }]);
   });
   it('forwards settings sources and excludes prompt, resume, model and generation flags', () => {
     expect(claudeSettingsArgs(['--resume', 'private-session', '--model', 'model', '--settings', '{"permissions":{}}', '--setting-sources=user,project', '--safe-mode', 'prompt', '--', '--settings=ignored']))
@@ -29,6 +29,7 @@ describe('native Claude policy query', () => {
     expect(frame.request).toEqual({ subtype: 'get_settings' });
     expect(child.stdin.write).toHaveBeenCalledTimes(1);
     expect(spawnProcess.mock.calls[0][1]).toContain('--no-session-persistence');
+    expect(spawnProcess.mock.calls[0][1]).toContain('--bare');
     const settings = { effective: { permissions: { deny: ['mcp__borg__borg_read_log'] } }, sources: [{ source: 'policySettings', settings: { permissions: { deny: ['mcp__borg__borg_read-log'] } } }] };
     child.stdout.emit('data', JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: settings } }) + '\n');
     expect(await result).toEqual(settings);
