@@ -1,7 +1,7 @@
 /**
  * `borg cleanup` — reap orphaned worktrees for evicted drones (gh#882).
  *
- * An evicted drone (manual `borg_evict-drone`, watchdog
+ * An evicted drone (manual `borg_evict_drone`, watchdog
  * `autoEvictPresumedDead`, or gh#877 graceful self-shutdown) leaves its
  * worktree dir (`~/.borg/worktrees/<repo>/<name>`) + its `wt-<suffix>`
  * branch on disk. Nothing reclaims them. This command finds and SAFELY

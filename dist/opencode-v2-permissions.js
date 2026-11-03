@@ -1,5 +1,6 @@
 import { BORG_COORDINATION_TOOLS, BORG_DISPATCHER_APPROVAL_DISCLOSURE } from './cli-tool-approval.js';
 import { isCanonicalPath } from './private-root.js';
+import { assertToolNamePoliciesMigrated } from './tool-name-migration.js';
 export const OPENCODE_V2_COORDINATION_TOOLS = BORG_COORDINATION_TOOLS.map(name => `borg_borg_${name}`.replace(/[^a-zA-Z0-9_-]/g, '_'));
 const matches = (pattern, input) => new RegExp(`^${pattern.split('*').map(part => part.split('?').map(text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.')).join('.*')}$`, process.platform === 'win32' ? 'i' : '').test(input);
 export function effectiveOpenCodeV2Permission(rules, action, resource = '*') {
@@ -42,6 +43,7 @@ export async function applyOpenCodeV2LaunchPermissions(client, sessionID, direct
     const agentID = session.agent ?? documents.reduce((id, document) => document.default_agent ?? id, 'build');
     const agent = await client.agent.get({ agentID, location: { directory } });
     const rules = [...agent.data.permissions, ...(session.permissions ?? [])];
+    assertToolNamePoliciesMigrated('opencode', { entries, permissions: rules });
     const restrictive = OPENCODE_V2_COORDINATION_TOOLS.filter(tool => effectiveOpenCodeV2Permission(rules, tool) !== 'allow');
     const warnings = [];
     const access = [];

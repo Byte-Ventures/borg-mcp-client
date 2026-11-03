@@ -21,6 +21,7 @@ import { RepresentativeError, type RepresentativeContext } from '../src/represen
 import { createRepresentativeStore } from '../src/representative-store.js';
 import { readCurrent, representativeStateRoot } from '../src/representative-db.js';
 import { REPRESENTATIVE_TOOL_NAMES, serveRepresentativeMcp } from '../src/representative-mcp.js';
+import { toolNameSpellings } from '../src/tool-names.js';
 
 const originalHome = process.env.HOME;
 const originalStateRoot = process.env.BORG_STATE_ROOT;
@@ -133,11 +134,11 @@ describe('representative stdio MCP (mock backend)', () => {
     const names = listed.result.tools.map((tool: any) => tool.name).sort();
     expect(names).toEqual([...REPRESENTATIVE_TOOL_NAMES].sort());
     expect(names).toEqual([
-      'borg_representative-ack',
-      'borg_representative-deliver',
-      'borg_representative-read',
-      'borg_representative-send',
-      'borg_representative-status',
+      'borg_representative_ack',
+      'borg_representative_deliver',
+      'borg_representative_read',
+      'borg_representative_send',
+      'borg_representative_status',
     ]);
     for (const tool of listed.result.tools) {
       expect(tool.inputSchema.additionalProperties).toBe(false);
@@ -151,18 +152,19 @@ describe('representative stdio MCP (mock backend)', () => {
     await server.close();
   });
 
-  it('round-trips a human request and the Coordinator reply, then acknowledges it', async () => {
+  it.each([false, true])('round-trips the restricted surface (legacy aliases: %s)', async legacy => {
     const { client, server } = await connect();
     await client.initialize();
+    const call = (name: string, args: Record<string, unknown> = {}) => client.call(legacy ? toolNameSpellings(name)[1] : name, args);
 
-    const status = await client.call('borg_representative-status');
+    const status = await call('borg_representative_status');
     expect(status.isError).toBe(false);
     expect(status.body.coordinator.drone_id).toBe(COORD_ID);
     expect(status.body.representative.drone_id).toBe(REP_ID);
     expect(status.body.delivery).toContain('deliver');
     expect(status.body.binding_fingerprint).toMatch(/^[0-9a-f]{64}$/);
 
-    const sent = await client.call('borg_representative-send', {
+    const sent = await call('borg_representative_send', {
       request_id: REQUEST_ID,
       kind: 'question',
       authorization: 'user_authorized',
@@ -175,15 +177,18 @@ describe('representative stdio MCP (mock backend)', () => {
     cube.post(BUILDER_ID, 'unrelated worker traffic', [REP_ID]);
     const reply = cube.post(COORD_ID, `request_id ${REQUEST_ID}: yes, wait.`, [REP_ID]);
 
-    const read = await client.call('borg_representative-read');
+    const read = await call('borg_representative_read');
     expect(read.body.replies).toEqual([
       expect.objectContaining({ entry_id: reply.id, in_reply_to: REQUEST_ID, addressed: 'direct' }),
     ]);
     expect(JSON.stringify(read.body)).not.toContain('unrelated worker traffic');
 
-    const acked = await client.call('borg_representative-ack', { entry_id: reply.id });
+    const acked = await call('borg_representative_ack', { entry_id: reply.id });
     expect(acked.isError).toBe(false);
     expect(cube.acks).toEqual([reply.id]);
+    const delivered = await call('borg_representative_deliver', { through: reply.id });
+    expect(delivered.body.advanced).toBe(true);
+    expect((await call('borg_representative_read')).body.replies).toEqual([]);
     await server.close();
   });
 
@@ -192,11 +197,11 @@ describe('representative stdio MCP (mock backend)', () => {
     await client.initialize();
     const base = { kind: 'request', authorization: 'user_authorized', message: 'Build it.' };
     for (const extra of [{ to: [BUILDER_ID] }, { to: 'broadcast' }]) {
-      const refused = await client.call('borg_representative-send', { ...base, ...extra });
+      const refused = await client.call('borg_representative_send', { ...base, ...extra });
       expect(refused.isError).toBe(true);
       expect(refused.body.error.code).toBe('INVALID_INPUT');
     }
-    for (const name of ['borg_log', 'borg_tool', 'borg_evict-drone']) {
+    for (const name of ['borg_log', 'borg_tool', 'borg_evict_drone', 'borg_evict-drone', 'borg_describe-tool', 'borg_describe_tool']) {
       const refused = await client.call(name, { message: 'x', to: 'broadcast' });
       expect(refused.isError).toBe(true);
     }
@@ -208,11 +213,13 @@ describe('representative stdio MCP (mock backend)', () => {
     cube.whoamiCubeId = OTHER_CUBE_ID;
     const { client, server } = await connect();
     await client.initialize();
-    const refused = await client.call('borg_representative-send', {
-      kind: 'request', authorization: 'user_authorized', message: 'Build it.',
-    });
-    expect(refused.isError).toBe(true);
-    expect(refused.body.error.code).toBe('BINDING_MISMATCH');
+    for (const name of toolNameSpellings('borg_representative_send')) {
+      const refused = await client.call(name, {
+        kind: 'request', authorization: 'user_authorized', message: 'Build it.',
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.body.error.code).toBe('BINDING_MISMATCH');
+    }
     expect(cube.appendCalls).toHaveLength(0);
     await server.close();
   });
@@ -222,7 +229,7 @@ describe('representative stdio MCP (mock backend)', () => {
       throw new RepresentativeError('NOT_PREPARED', 'No representative connection is prepared for this worktree.');
     });
     await client.initialize();
-    for (const name of REPRESENTATIVE_TOOL_NAMES) {
+    for (const name of REPRESENTATIVE_TOOL_NAMES.flatMap(toolNameSpellings)) {
       const refused = await client.call(name, name.endsWith('-ack') ? { entry_id: REQUEST_ID } : {});
       expect(refused.isError).toBe(true);
     }
@@ -234,7 +241,7 @@ describe('representative stdio MCP (mock backend)', () => {
     const first = await connect();
     await first.client.initialize();
     const input = { request_id: REQUEST_ID, kind: 'request', authorization: 'user_authorized', message: 'Do X.' };
-    const ambiguous = await first.client.call('borg_representative-send', input);
+    const ambiguous = await first.client.call('borg_representative_send', input);
     expect(ambiguous.isError).toBe(true);
     expect(ambiguous.body.outcome).toBe('ambiguous');
     expect(ambiguous.body.request_id).toBe(REQUEST_ID);
@@ -243,14 +250,14 @@ describe('representative stdio MCP (mock backend)', () => {
 
     const second = await connect();
     await second.client.initialize();
-    const status = await second.client.call('borg_representative-status');
+    const status = await second.client.call('borg_representative_status');
     expect(status.body.unresolved_requests.map((r: any) => r.request_id)).toEqual([REQUEST_ID]);
 
-    const fresh = await second.client.call('borg_representative-send', { ...input, request_id: undefined });
+    const fresh = await second.client.call('borg_representative_send', { ...input, request_id: undefined });
     expect(fresh.isError).toBe(true);
     expect(fresh.body.error.code).toBe('AMBIGUOUS_SEND_UNRESOLVED');
 
-    const retried = await second.client.call('borg_representative-send', input);
+    const retried = await second.client.call('borg_representative_send', input);
     expect(retried.isError).toBe(false);
     expect(retried.body.deduplicated).toBe(true);
     expect(cube.entries.filter((entry) => entry.drone_id === REP_ID)).toHaveLength(1);
@@ -263,8 +270,8 @@ describe('representative stdio MCP (mock backend)', () => {
     await client.initialize();
     const args = { kind: 'request', authorization: 'user_authorized', message: 'Do X.' };
     const [one, two] = await Promise.all([
-      client.call('borg_representative-send', args),
-      client.call('borg_representative-send', args),
+      client.call('borg_representative_send', args),
+      client.call('borg_representative_send', args),
     ]);
     const ok = [one, two].filter((r) => !r.isError);
     const refused = [one, two].filter((r) => r.isError);
@@ -281,7 +288,7 @@ describe('representative stdio MCP (mock backend)', () => {
     cube.appendPlan = [{ error: new BorgServerError('SESSION_REVOKED', 'the selected Borg server revoked this worktree session'), stored: false }];
     const { client, server } = await connect();
     await client.initialize();
-    const refused = await client.call('borg_representative-send', { kind: 'request', authorization: 'user_authorized', message: 'Do X.' });
+    const refused = await client.call('borg_representative_send', { kind: 'request', authorization: 'user_authorized', message: 'Do X.' });
     expect(refused.isError).toBe(true);
     expect(refused.body.error.code).toBe('SEND_REJECTED');
     expect(refused.body.error.details).toMatchObject({ cause_code: 'SESSION_REVOKED' });
@@ -294,13 +301,13 @@ describe('representative stdio MCP (mock backend)', () => {
     await prepared();
     const { client, server } = await connect();
     const init = await client.initialize();
-    const read = await client.call('borg_representative-read', {});
+    const read = await client.call('borg_representative_read', {});
     expect(read.body.replies[0].entry_id).toBe(entry.id);
-    expect((await client.call('borg_representative-read', { entry_id: entry.id })).body.error.code).toBe('INVALID_INPUT');
-    expect((await client.call('borg_representative-read', {})).body.replies.map((r: any) => r.entry_id)).toEqual([entry.id]);
-    const delivered = await client.call('borg_representative-deliver', { through: entry.id });
+    expect((await client.call('borg_representative_read', { entry_id: entry.id })).body.error.code).toBe('INVALID_INPUT');
+    expect((await client.call('borg_representative_read', {})).body.replies.map((r: any) => r.entry_id)).toEqual([entry.id]);
+    const delivered = await client.call('borg_representative_deliver', { through: entry.id });
     expect(delivered.body).toMatchObject({ advanced: true, binding_fingerprint: read.body.binding_fingerprint });
-    expect((await client.call('borg_representative-read', {})).body.replies).toEqual([]);
+    expect((await client.call('borg_representative_read', {})).body.replies).toEqual([]);
     expect(init.result.instructions).not.toMatch(/fetched\s+again only by its entry_id/);
     expect(read.body.delivery).not.toMatch(/fetched\s+again only by its entry_id/);
     await server.close();
@@ -315,10 +322,10 @@ describe('representative stdio MCP (mock backend)', () => {
     const { client, server } = await connect();
     await client.initialize();
     for (const [name, args] of [
-      ['borg_representative-send', { kind: 'question', authorization: 'model_advice', message: 'hi' }],
-      ['borg_representative-read', {}],
-      ['borg_representative-deliver', { through: reply.id }],
-      ['borg_representative-ack', { entry_id: reply.id }],
+      ['borg_representative_send', { kind: 'question', authorization: 'model_advice', message: 'hi' }],
+      ['borg_representative_read', {}],
+      ['borg_representative_deliver', { through: reply.id }],
+      ['borg_representative_ack', { entry_id: reply.id }],
     ] as const) {
       const refused = await client.call(name, args);
       expect(refused.isError).toBe(true);
@@ -327,7 +334,7 @@ describe('representative stdio MCP (mock backend)', () => {
     }
     expect(cube.appendCalls).toHaveLength(0);
     expect(cube.acks).toEqual([]);
-    const status = await client.call('borg_representative-status');
+    const status = await client.call('borg_representative_status');
     expect(status.isError).toBe(false);
     expect(status.body.state_problem.code).toBe('REPRESENTATIVE_STATE_CORRUPT');
     await server.close();
@@ -336,7 +343,7 @@ describe('representative stdio MCP (mock backend)', () => {
   it('writes nothing but JSON-RPC frames to stdout', async () => {
     const { client, server } = await connect();
     await client.initialize();
-    await client.call('borg_representative-status');
+    await client.call('borg_representative_status');
     for (const line of client.rawLines) expect(JSON.parse(line).jsonrpc).toBe('2.0');
     await server.close();
   });

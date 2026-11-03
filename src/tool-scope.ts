@@ -8,28 +8,28 @@
  * Never treat this filter as a security boundary.
  *
  * Deferred (filtered-out) tools are never lost — they remain reachable through
- * the always-present dispatcher (`borg_tool` / `borg_describe-tool`), so a
+ * the always-present dispatcher (`borg_tool` / `borg_describe_tool`), so a
  * scoped role can never dead-end.
  */
 
 /** Always-present escape hatch — reaches any borg tool regardless of scope. */
-export const DISPATCHER_TOOLS = ['borg_tool', 'borg_describe-tool'] as const;
+export const DISPATCHER_TOOLS = ['borg_tool', 'borg_describe_tool'] as const;
 
 /** Every role needs these; pre-loaded natively for all roles. */
 export const UNIVERSAL_TOOLS = [
   'borg_regen',
   'borg_log',
-  'borg_read-log',
-  'borg_read-entry',
+  'borg_read_log',
+  'borg_read_entry',
   'borg_roster',
-  'borg_stream-status',
+  'borg_stream_status',
   'borg_whoami',
   'borg_ack',
-  'borg_ack-status',
+  'borg_ack_status',
   'borg_version',
   'borg_cube',
   'borg_role',
-  'borg_role-rationale',
+  'borg_role_rationale',
   'borg_assimilate',
   'borg_playbook', // gh#912: on-demand operating-playbook chapter — every role needs it
   'borg_docs', // gh#docs-site B: in-product docs lookup — every role can answer "how does borgmcp work"
@@ -38,23 +38,23 @@ export const UNIVERSAL_TOOLS = [
 
 /** Cube/role/drone management — native for management seats, deferred for workers. */
 export const MANAGEMENT_TOOLS = [
-  'borg_create-cube',
-  'borg_update-cube',
-  'borg_delete-cube',
-  'borg_create-role',
-  'borg_update-role',
-  'borg_delete-role',
-  'borg_patch-role-section',
-  'borg_patch-taxonomy-class',
-  'borg_reassign-drone',
-  'borg_evict-drone',
-  'borg_sync-roles',
-  'borg_apply-template',
-  'borg_list-cubes',
-  'borg_list-drones',
-  'borg_list-roles',
-  'borg_list-templates',
-  'borg_remove-decision',
+  'borg_create_cube',
+  'borg_update_cube',
+  'borg_delete_cube',
+  'borg_create_role',
+  'borg_update_role',
+  'borg_delete_role',
+  'borg_patch_role_section',
+  'borg_patch_taxonomy_class',
+  'borg_reassign_drone',
+  'borg_evict_drone',
+  'borg_sync_roles',
+  'borg_apply_template',
+  'borg_list_cubes',
+  'borg_list_drones',
+  'borg_list_roles',
+  'borg_list_templates',
+  'borg_remove_decision',
 ] as const;
 
 /**
@@ -65,10 +65,10 @@ export const MANAGEMENT_TOOLS = [
  * Named here only to focus reviewer attention.
  */
 export const AUTH_SENSITIVE_TOOLS = [
-  'borg_evict-drone',
-  'borg_delete-cube',
-  'borg_delete-role',
-  'borg_reassign-drone',
+  'borg_evict_drone',
+  'borg_delete_cube',
+  'borg_delete_role',
+  'borg_reassign_drone',
 ] as const;
 
 export interface RoleScope {

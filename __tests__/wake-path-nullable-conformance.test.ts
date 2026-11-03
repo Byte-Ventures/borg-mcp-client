@@ -10,8 +10,8 @@ describe('wake-path health structuredContent conformance', () => {
   const validator = new AjvJsonSchemaValidator();
   const byName = new Map(TOOL_MANIFEST.map((t) => [t.name, t]));
 
-  it('borg_stream-status accepts inbox_monitor_healthy: null', () => {
-    const schema = byName.get('borg_stream-status')!.outputSchema!;
+  it('borg_stream_status accepts inbox_monitor_healthy: null', () => {
+    const schema = byName.get('borg_stream_status')!.outputSchema!;
     expect(schema.properties.inbox_monitor_healthy.type).toEqual(['boolean', 'null']);
     const validate = validator.getValidator(schema as never);
     const emitted = {
@@ -53,7 +53,7 @@ describe('wake-path health structuredContent conformance', () => {
     // every remaining strict-scalar output property to be non-nullable by
     // construction in its handler (documented here as the audited allowlist).
     const nullableStrictScalars = new Set([
-      'borg_stream-status:inbox_monitor_healthy',
+      'borg_stream_status:inbox_monitor_healthy',
       'borg_regen:wake_path_healthy',
     ]);
     for (const t of TOOL_MANIFEST) {

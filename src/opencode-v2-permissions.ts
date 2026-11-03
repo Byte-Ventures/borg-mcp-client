@@ -1,6 +1,7 @@
 import type { OpenCodeClient } from '@opencode/client';
 import { BORG_COORDINATION_TOOLS, BORG_DISPATCHER_APPROVAL_DISCLOSURE } from './cli-tool-approval.js';
 import { isCanonicalPath } from './private-root.js';
+import { assertToolNamePoliciesMigrated } from './tool-name-migration.js';
 
 export interface OpenCodeV2Permission { action: string; resource: string; effect: 'allow' | 'deny' | 'ask' }
 export const OPENCODE_V2_COORDINATION_TOOLS = BORG_COORDINATION_TOOLS.map(name => `borg_borg_${name}`.replace(/[^a-zA-Z0-9_-]/g, '_'));
@@ -41,6 +42,7 @@ export async function applyOpenCodeV2LaunchPermissions(client: OpenCodeClient, s
   const agentID = session.agent ?? documents.reduce((id, document) => document.default_agent ?? id, 'build');
   const agent = await client.agent.get({ agentID, location: { directory } });
   const rules = [...agent.data.permissions, ...(session.permissions ?? [])];
+  assertToolNamePoliciesMigrated('opencode', { entries, permissions: rules });
   const restrictive = OPENCODE_V2_COORDINATION_TOOLS.filter(tool => effectiveOpenCodeV2Permission(rules, tool) !== 'allow');
   const warnings: string[] = [];
   const access: OpenCodeV2Permission[] = [];

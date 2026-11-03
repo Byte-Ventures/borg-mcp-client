@@ -40,6 +40,10 @@ OpenCode 2 keeps its native Code Mode default. Borg does not set `codemode` unle
 you explicitly configured it. To expose Borg tools directly, set
 `mcp.servers.borg.codemode` to `false` in your OpenCode configuration.
 
+Borg advertises underscore-only names such as `borg_read_log`. For existing
+permissions or saved declarations, follow [tool-name migration](TOOL_NAME_MIGRATION.md)
+before upgrading. Historical roles and logs are preserved.
+
 In Code Mode, use discovery and generated declarations for the exact callable
 names. Punctuation can change the generated names; do not derive JavaScript
 identifiers from MCP names. Batch independent reads, await dependent operations

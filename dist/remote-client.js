@@ -128,7 +128,7 @@ function isConnectionReset(error) {
 }
 function unreadLogTransportFailure(cause) {
     return new BorgServerUnreachableError('Borg could not complete the unread log read after one automatic retry. ' +
-        'The request may have reached the server; repeat `borg_read-log unread_only=true` until caught up.', { cause });
+        'The request may have reached the server; repeat `borg_read_log unread_only=true` until caught up.', { cause });
 }
 async function localAuthorityContext(sessionToken, apiUrl, expectedServerTrustIdentity) {
     const active = await getActiveCube();
@@ -689,7 +689,7 @@ async function authedFetch(path, init = {}) {
             throw new CubeDeletedError();
         }
         const retryGuidance = rateLimitRetryExhausted
-            ? ' Repeat `borg_read-log unread_only=true` until caught up.'
+            ? ' Repeat `borg_read_log unread_only=true` until caught up.'
             : '';
         throw new BorgServerHttpError(response.status, serverMessage
             ? `Borg server request failed (HTTP ${response.status}): ${serverMessage}${retryGuidance}`
@@ -952,7 +952,7 @@ export async function removeDecision(sessionToken, apiUrl, selector, serverTrust
  * detailed_description, the public role registry (no detailed_description
  * leakage for OTHER roles), the drone roster, and the caller's unread-log
  * COUNT (behind_by). gh#886: the recent-log PAYLOAD is no longer rendered
- * client-side — the drone gets the count and drains via borg_read-log. Use
+ * client-side — the drone gets the count and drains via borg_read_log. Use
  * on session start and before each new task to stay in sync.
  *
  * gh#29 Sprint C / Q3a: optional `since` cursor (entry-id UUID or

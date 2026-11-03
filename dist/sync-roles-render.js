@@ -54,17 +54,17 @@ export function renderSyncRolesResult(result, templateName) {
     const maybeLegacy = result;
     if (maybeLegacy.roles === undefined && 'updated' in maybeLegacy) {
         return [
-            `## borg_sync-roles — unavailable (server out of date)`,
+            `## borg_sync_roles — unavailable (server out of date)`,
             ``,
             `The borg server returned the legacy sync-roles response shape — it is running a version older than #473, which the non-clobbering sync view does not support.`,
             ``,
-            `**Action:** a server (worker) deploy is pending. Retry \`borg_sync-roles\` once it lands.`,
+            `**Action:** a server (worker) deploy is pending. Retry \`borg_sync_roles\` once it lands.`,
         ].join('\n');
     }
     const mode = result.dryRun
         ? '**DRY RUN** (review conflicts below; re-run with `apply: true` + a `decisions` map to commit)'
         : '**APPLIED**';
-    const lines = [`## borg_sync-roles — ${mode}`, `Template: ${escapeSyncDisplay(templateName)}`, ''];
+    const lines = [`## borg_sync_roles — ${mode}`, `Template: ${escapeSyncDisplay(templateName)}`, ''];
     // Gather all fragments across roles + taxonomy for tallying.
     const allFragments = [
         ...result.roles.flatMap((r) => r.fragments),

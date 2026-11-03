@@ -80,7 +80,7 @@ export interface RosterRole {
  * `wakePathFromStreak`, are intentionally UNCHANGED — this is a display-only
  * relabel within gh#503's copy-only scope (renaming the enum would be a
  * wire + schema change). An operator who wants a confirmed read cross-checks
- * `borg_stream-status` on the affected seat. Unknown wire values fall back
+ * `borg_stream_status` on the affected seat. Unknown wire values fall back
  * to the raw value so a newer server can't break an older client's roster.
  */
 const WAKE_PATH_DISPLAY: Record<string, string> = {

@@ -420,7 +420,7 @@ describe('local server route adapter', () => {
     await expect(remote.readLog(SESSION, ORIGIN, { unreadOnly: true, limit: 20 }))
       .rejects.toMatchObject({
         name: 'BorgServerUnreachableError',
-        message: expect.stringMatching(/unread log read|borg_read-log unread_only=true|may have reached/i),
+        message: expect.stringMatching(/unread log read|borg_read_log unread_only=true|may have reached/i),
       });
 
     const logCalls = fetchSpy.mock.calls.filter(([input, init]) =>
@@ -474,7 +474,7 @@ describe('local server route adapter', () => {
         .rejects.toMatchObject({
           name: 'BorgServerHttpError',
           status: 429,
-          message: expect.stringContaining('borg_read-log unread_only=true'),
+          message: expect.stringContaining('borg_read_log unread_only=true'),
         });
 
       const logCalls = fetchSpy.mock.calls.filter(([input, init]) =>
@@ -574,11 +574,11 @@ describe('local server route adapter', () => {
 
   it("keeps role-management operations and deletion's advertised remedies reachable (#376)", async () => {
     const remote = await import('../src/remote-client.js');
-    const deletion = TOOL_MANIFEST.find((tool) => tool.name === 'borg_delete-role');
-    const rationale = TOOL_MANIFEST.find((tool) => tool.name === 'borg_role-rationale');
+    const deletion = TOOL_MANIFEST.find((tool) => tool.name === 'borg_delete_role');
+    const rationale = TOOL_MANIFEST.find((tool) => tool.name === 'borg_role_rationale');
 
-    expect(deletion?.description).toContain('borg_reassign-drone');
-    expect(deletion?.description).toContain('borg_evict-drone');
+    expect(deletion?.description).toContain('borg_reassign_drone');
+    expect(deletion?.description).toContain('borg_evict_drone');
     expect(rationale?.description).toContain('named section');
 
     await remote.reassignDrone(DRONE_ID, ROLE_ID);

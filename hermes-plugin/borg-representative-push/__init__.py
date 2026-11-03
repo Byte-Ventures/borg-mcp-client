@@ -13,7 +13,7 @@ It is a thin adapter. Borg owns every wake decision and all wake state:
 - The listener decides when to wake again, backs off when Hermes refuses, and
   stops waking once the conversation delivers the reply. Reply content never
   passes through the plugin: the woken conversation fetches it with
-  ``borg_representative-read`` and confirms it with ``borg_representative-deliver``.
+  ``borg_representative_read`` and confirms it with ``borg_representative_deliver``.
 
 The listener starts only from ``ctx.register_platform_handler``, which Hermes calls
 when a gateway platform connects, so it never runs in the CLI, the Desktop backend
@@ -39,8 +39,8 @@ PROTOCOL = 2
 
 # Fixed and body-free: no entry id, sender, text or document ever enters the prompt.
 WAKE_TEXT = (
-    "Borg: new Coordinator reply. Call borg_representative-read, persist and relay, "
-    "then borg_representative-deliver through the last persisted entry_id."
+    "Borg: new Coordinator reply. Call borg_representative_read, persist and relay, "
+    "then borg_representative_deliver through the last persisted entry_id."
 )
 
 BACKOFF_START_S = 1.0

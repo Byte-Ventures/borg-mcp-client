@@ -8,11 +8,13 @@ if (process.argv[3]) appendFileSync(process.argv[3], JSON.stringify({
 }) + '\n');
 const server = new Server({name:'borg.native-fixture',version:'1'}, {capabilities:{tools:{}}});
 server.setRequestHandler(ListToolsRequestSchema, async () => ({tools:[
-  {name:'borg_read-log',description:'Read a compact local fixture log.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
+  {name:'borg_read_log',description:'Read a compact local fixture log.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
+  {name:'borg_role',description:'Read the fixture role.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
+  {name:'borg_playbook',description:'Read the fixture operating playbook.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
   {name:'borg_roster',description:'Read the local fixture roster.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
 ]}));
 server.setRequestHandler(CallToolRequestSchema, async request => {
   appendFileSync(process.argv[2], JSON.stringify({name:request.params.name,meta:request.params._meta})+'\n');
-  return {content:[{type:'text',text:request.params.name==='read-log'?'fixture log':'fixture drone'}]};
+  return {content:[{type:'text',text:request.params.name==='borg_read_log'?'fixture log':'fixture drone'}]};
 });
 await server.connect(new StdioServerTransport());

@@ -139,7 +139,7 @@ describe('borg_log ARRIVAL instruction ordering', () => {
     await main();
     const { getActiveCube } = await import('../src/cubes.js');
     vi.mocked(getActiveCube).mockResolvedValueOnce(null);
-    const result = await state.handlers[1]({ params: { name: 'borg_stream-status', arguments: {} } });
+    const result = await state.handlers[1]({ params: { name: 'borg_stream_status', arguments: {} } });
     expect(result.isError, JSON.stringify(result)).not.toBe(true);
     expect(result.content[0].text).toContain('Agent session source: claude-session-start');
     expect(result.content[0].text).toContain('Session id: "claude:session-a"');

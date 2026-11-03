@@ -20,13 +20,29 @@ vi.mock('../src/opencode-v2-broker.js', async importOriginal => ({ ...await impo
   startOpenCodeV2Broker: async options => ({ descriptor: { sessionID: options.sessionID }, call: state.call, selectSession: vi.fn(async () => {}), close: state.closeBroker }),
 }));
 import { launchOpenCodeV2Process } from '../src/opencode-v2-launch.js';
+import { ToolNameMigrationError } from '../src/tool-name-migration.js';
 let root: string;
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-launch-completion-')));
   vi.stubEnv('BORG_STATE_ROOT', root); vi.stubEnv('HOME', root);
   state.closeServer.mockClear(); state.closeBroker.mockClear(); state.start.mockReset(); state.call.mockReset();
+  state.prepare.mockReset(); state.prepare.mockResolvedValue([]);
   state.start.mockResolvedValue({ url: 'http://127.0.0.1:1234', pid: 123, version: '2.1.2', close: state.closeServer,
     tuiEnv: () => ({}), closed: new Promise(() => {}) });
+});
+it('preserves the actionable migration refusal and cleans up before TUI or kickoff', async () => {
+  state.call.mockResolvedValue({ accepted: true, pluginReady: true, tools: ['borg_borg_log'] });
+  const failure = new ToolNameMigrationError('opencode', 'a legacy hard policy needs migration.');
+  state.prepare.mockRejectedValue(failure);
+  const spawnProcess = vi.fn();
+  await expect(launchOpenCodeV2Process({ installation: { major: 2, minor: 1, patch: 2, executable: '/native/opencode' } as any,
+    cwd: root, env: {}, prompt: 'kickoff', seat: { worktree: root, cubeId: 'cube', droneId: 'drone' },
+    spawnProcess: spawnProcess as any,
+  })).rejects.toBe(failure);
+  expect(spawnProcess).not.toHaveBeenCalled();
+  expect(state.closeBroker).toHaveBeenCalledTimes(1);
+  expect(state.closeServer).toHaveBeenCalledTimes(1);
+  expect(state.call.mock.calls.some(([op, input]) => op === '/wake' && input.key === 'kickoff')).toBe(false);
 });
 afterEach(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 it('retains an exit during kickoff admission and lets callers await idempotent cleanup', async () => {

@@ -1765,7 +1765,7 @@ describe('OpenCode wake target binding', () => {
     });
     expect(status.split('\n')[0]).toBe('**Stream connected (OpenCode delivery degraded).**');
     expect(status).toContain('- **OpenCode failed**: 1');
-    expect(status).toContain('`borg_read-log unread_only=true`');
+    expect(status).toContain('`borg_read_log unread_only=true`');
   });
 
   it('reports an unauthorized prompt rejection with no accepted entry', async () => {

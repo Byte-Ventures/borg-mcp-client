@@ -595,7 +595,7 @@ describe('gh#708: coalesced catch-up wake on a mid-turn-active thread', () => {
   });
 
   it('CODEX_CATCHUP_PROMPT is static — carries no token/secret/PII interpolation', () => {
-    expect(CODEX_CATCHUP_PROMPT).toContain('borg_read-log unread_only=true');
+    expect(CODEX_CATCHUP_PROMPT).toContain('borg_read_log unread_only=true');
     expect(CODEX_CATCHUP_PROMPT).toContain('Wake triage');
     expect(CODEX_CATCHUP_PROMPT).toContain(CUBE_ACTIVITY_RESUME_WAKE_MESSAGE);
     expect(CODEX_CATCHUP_PROMPT).toContain('resume the prior interrupted work');

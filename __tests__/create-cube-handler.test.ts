@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// client#499: the borg_create-cube handler requires an EXPLICIT repository (no
+// client#499: the borg_create_cube handler requires an EXPLICIT repository (no
 // cwd fallback) and reports an existing repository cube honestly on 'resolved'.
 const state = vi.hoisted(() => ({ handlers: [] as Array<(r: any) => Promise<any>>, createCube: vi.fn() }));
 
@@ -24,7 +24,7 @@ import { main } from '../src/index.js';
 
 const CUBE = { id: 'cube-1', name: 'made', cube_directive: 'existing', roles: [{ id: 'role-1', name: 'Coordinator' }] };
 
-describe('borg_create-cube handler — explicit repository (client#499)', () => {
+describe('borg_create_cube handler — explicit repository (client#499)', () => {
   const originalOpenCode = process.env.BORG_OPENCODE;
   const originalAgentKind = process.env.BORG_AGENT_KIND;
   beforeEach(() => {
@@ -44,7 +44,7 @@ describe('borg_create-cube handler — explicit repository (client#499)', () => 
 
   async function callTool(args: any) {
     await main();
-    return state.handlers[1]({ params: { name: 'borg_create-cube', arguments: args } });
+    return state.handlers[1]({ params: { name: 'borg_create_cube', arguments: args } });
   }
 
   it('refuses when repository is absent — no cwd fallback', async () => {

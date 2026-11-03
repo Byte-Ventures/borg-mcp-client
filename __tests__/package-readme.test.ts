@@ -108,7 +108,7 @@ describe('published package artifact', () => {
 
       expect(packedReadme.match(/^npm install -g borgmcp$/gm)).toHaveLength(1);
       expect(packedReadme).not.toMatch(/^npm install -g borgmcp@/gm);
-      expect(packedReadme).toContain('`borg_read-entry`');
+      expect(packedReadme).toContain('`borg_read_entry`');
       expect(packedReadme).toContain('Every `borg_log` call requires an explicit `to` audience');
       expect(packedReadme).toContain('`"broadcast"`');
       expect(packedReadme).toContain('non-empty selector array');
@@ -116,7 +116,7 @@ describe('published package artifact', () => {
       expect(packedReadme).toContain('Omission,');
       const packedLogSchema = packedToolManifest.slice(
         packedToolManifest.indexOf("name: 'borg_log'"),
-        packedToolManifest.indexOf("name: 'borg_list-cubes'"),
+        packedToolManifest.indexOf("name: 'borg_list_cubes'"),
       );
       expect(packedLogSchema).toContain('Required explicit audience');
       expect(packedLogSchema).not.toContain('oneOf');

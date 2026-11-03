@@ -239,7 +239,7 @@ export declare function removeDecision(sessionToken: string, apiUrl: string, sel
  * detailed_description, the public role registry (no detailed_description
  * leakage for OTHER roles), the drone roster, and the caller's unread-log
  * COUNT (behind_by). gh#886: the recent-log PAYLOAD is no longer rendered
- * client-side — the drone gets the count and drains via borg_read-log. Use
+ * client-side — the drone gets the count and drains via borg_read_log. Use
  * on session start and before each new task to stay in sync.
  *
  * gh#29 Sprint C / Q3a: optional `since` cursor (entry-id UUID or

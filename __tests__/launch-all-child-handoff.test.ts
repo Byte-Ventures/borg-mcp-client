@@ -19,15 +19,28 @@ describe('batch launch through the real borg child entrypoints', () => {
     mkdirSync(repo);
     mkdirSync(bin);
     // This executable records the real child boundary. It deliberately refuses
-    // app-server startup; this test neither invokes an installed CLI nor starts
-    // a model session. Reaching --listen proves the live-monitor guard passed.
+    // interactive app-server startup; the configuration probe returns an empty
+    // effective policy. No installed CLI or model session is invoked. Reaching
+    // --listen proves both the live-monitor and policy-migration guards passed.
     writeFileSync(join(bin, 'codex'), `#!${process.execPath}
 const fs = require('node:fs');
 fs.appendFileSync(${JSON.stringify(capture)}, JSON.stringify({
   cwd: process.cwd(), args: process.argv.slice(2),
   expectation: process.env.BORG_LAUNCH_EXPECTED_SEAT,
 }) + '\\n');
-process.exit(23);
+if (process.argv.includes('app-server') && !process.argv.includes('--listen')) {
+  let buffer = '';
+  process.stdin.on('data', chunk => {
+    buffer += chunk;
+    let index;
+    while ((index = buffer.indexOf('\\n')) !== -1) {
+      const request = JSON.parse(buffer.slice(0, index)); buffer = buffer.slice(index + 1);
+      if (request.id === undefined) continue;
+      const result = request.method === 'config/read' ? {config:{},layers:[]} : {};
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,result}) + '\\n');
+    }
+  });
+} else process.exit(23);
 `, { mode: 0o700 });
     const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' });
     git('init');

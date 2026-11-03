@@ -1,12 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { BorgCli } from './cubes.js';
-/**
- * Client #20: the narrow coordination surface a borg-launched agent needs
- * without an approval round-trip. Keep the direct-tool list deliberately
- * smaller than the complete Borg MCP surface. borg_tool's transitive scope is
- * disclosed separately before consent.
- */
-export declare const BORG_COORDINATION_TOOLS: readonly ["regen", "log", "read-log", "roster", "ack", "stream-status", "whoami", "cube", "role", "playbook", "tool", "describe-tool"];
+export declare const BORG_COORDINATION_TOOLS: string[];
 export declare const CODEX_BORG_COORDINATION_TOOLS: string[];
 export declare const OPENCODE_BORG_COORDINATION_TOOLS: string[];
 export declare const BORG_DISPATCHER_APPROVAL_DISCLOSURE = "This set includes borg_tool: approving the dispatcher also approves any Borg operation invoked through it.";
@@ -30,6 +24,7 @@ export declare function mergeOpenCodePermission(permission: unknown, tools?: str
 export declare function inspectOpenCodeBorgApprovals(config: unknown): ApprovalInspection;
 export declare function codexBorgApprovalArgs(tools?: string[]): string[];
 export interface ApprovalIo {
+    readClaudeConfig?: () => Promise<unknown> | unknown;
     readCodexConfig: (approvalArgs?: string[]) => Promise<unknown> | unknown;
     readOpenCodeConfig: (permissionOverride?: string) => Promise<unknown> | unknown;
     isTTY: () => boolean;
@@ -40,6 +35,7 @@ export interface EffectiveConfigOptions {
     env: NodeJS.ProcessEnv;
     /** User-selected Codex profile/config flags, in their launch precedence. */
     codexArgs: string[];
+    claudeArgs?: string[];
     loadCodex?: (args: string[], cwd: string, env: NodeJS.ProcessEnv, profile?: string) => Promise<unknown>;
     loadOpenCode?: (cwd: string, env: NodeJS.ProcessEnv) => Promise<unknown> | unknown;
 }

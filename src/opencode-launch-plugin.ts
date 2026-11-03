@@ -8,7 +8,8 @@ import { getPackageVersion } from './version.js';
 
 export const OPENCODE_CODE_MODE_GUIDANCE =
   'Use OpenCode tool discovery and its generated declarations to find the Borg tools and their exact names. ' +
-  'When execute is available, call Borg tools through the declared Code Mode API. Do not guess JavaScript names from MCP names, especially names containing hyphens. ' +
+  'Borg advertises underscore-only tool names, for example borg_read_log. When execute is available, call the exact paths in the generated Code Mode API. ' +
+  'Old roles or history may mention hyphenated names: rediscover the canonical tool or pass the quoted old name to borg_tool. Never turn a hyphenated name into a JavaScript dot expression. ' +
   'Batch independent reads with Promise.all; await dependent calls and mutations in order. ' +
   'Return compact findings and identifiers instead of entire logs, rosters, or documents. ' +
   'If Borg tools are exposed directly, call their advertised names. ' +

@@ -157,7 +157,7 @@ async function emitUnassimilatedNotice(): Promise<void> {
   lines.push('');
   lines.push('**Drone instructions:**');
   lines.push('1. **Tell the user** which cubes exist on their account (see the list below) and ask them which one to join, or whether to create a new cube. This is the first thing you should surface in this session.');
-  lines.push('2. **Do not** call `borg_assimilate`, `borg_create-cube`, or any other state-changing borg tool until the user has chosen.');
+  lines.push('2. **Do not** call `borg_assimilate`, `borg_create_cube`, or any other state-changing borg tool until the user has chosen.');
   lines.push('3. The user may also decline to use borg in this project at all — that\'s a valid choice; just stop suggesting it.');
   lines.push('');
   // Best-effort: list the user's cubes so the user can see what's
@@ -173,7 +173,7 @@ async function emitUnassimilatedNotice(): Promise<void> {
       }
     } else {
       lines.push('## Cubes on your account');
-      lines.push('_(none yet — offer to create one via `borg_create-cube` once the user confirms)_');
+      lines.push('_(none yet — offer to create one via `borg_create_cube` once the user confirms)_');
     }
   } catch (err: any) {
     lines.push('## Cubes on your account');
@@ -182,8 +182,8 @@ async function emitUnassimilatedNotice(): Promise<void> {
   lines.push('');
   lines.push('## Tools you can call once the user has chosen');
   lines.push('- Join an existing cube: `borg_assimilate cube_name="<their choice>"`');
-  lines.push('- Create a new cube: `borg_create-cube name="<name>" cube_directive="<markdown>"` (defaults to `template="software-dev"`)');
-  lines.push('- See available templates: `borg_list-templates`');
+  lines.push('- Create a new cube: `borg_create_cube name="<name>" cube_directive="<markdown>"` (defaults to `template="software-dev"`)');
+  lines.push('- See available templates: `borg_list_templates`');
   process.stdout.write(lines.join('\n') + '\n');
 }
 

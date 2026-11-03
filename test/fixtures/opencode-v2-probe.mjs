@@ -80,29 +80,30 @@ const provider = createServer(async (req, res) => {
   }
   const advertisedPaths = [...system.matchAll(/- (tools\.[^\n(]+)\(/g)].map(match => match[1]);
   const borgPaths = [...new Set([...advertisedPaths, ...discoveredPaths])].filter(name => /^tools\.borg[.[]/.test(name));
-  const paths = borgPaths.filter(name=>name.includes('borg_read-log') || name.includes('borg_roster'));
+  const paths = borgPaths.filter(name=>name.includes('borg_read_log') || name.includes('borg_roster'));
+  const orientationPaths = ['borg_role', 'borg_playbook'].map(tool => borgPaths.find(name => name.endsWith('.' + tool) || name.endsWith('["' + tool + '"]')));
   const logPath = borgPaths.find(name=>/(?:\.borg_log|\["borg_log"\])$/.test(name));
   if (process.env.OPENCODE_TEST_TRACE === '1') console.log(JSON.stringify({ paths: [...system.matchAll(/tools\.[^\n(]+\(/g)].map(match => match[0]), direct: body.tools?.map(tool => tool.function?.name) }));
-  const directNames = body.tools?.map(tool => tool.function?.name).filter(name => ['borg_borg_read-log','borg_borg_roster'].includes(name)) ?? [];
+  const directNames = body.tools?.map(tool => tool.function?.name).filter(name => ['borg_borg_read_log','borg_borg_roster'].includes(name)) ?? [];
   const shellPath = [...advertisedPaths, ...discoveredPaths].find(name => /(?:\.shell|\["shell"\])$/.test(name));
   const shellCode = shellPath ? `for (let i=0;i<3;i++) await ${shellPath}({command:'echo fixture',description:'Local fixture'});` : '';
   if (process.env.OPENCODE_TEST_TRACE === '1') console.log(JSON.stringify({ shellPath, result: body.messages.filter(message=>message.role==='tool') }));
   let toolCalls = [];
   const actionIndex = requests.length - (searched ? 1 : 0);
-  if (!searched && system.includes('catalog is partial') && (paths.length < 2 || !shellPath || (realSeat && !logPath))) {
+  if (!searched && system.includes('catalog is partial') && (paths.length < 2 || orientationPaths.some(path => !path) || !shellPath || (realSeat && !logPath))) {
     searched = true;
     toolCalls = [{index:0,id:'fixture-search',type:'function',function:{name:'execute',arguments:JSON.stringify({code:'return {borg:search({namespace:"tools.borg",limit:100}),shell:search({query:"shell",limit:100})};'})}}];
   }
   else if (actionIndex === 1 && directNames.length >= 2) toolCalls = directNames.slice(0,2).map((name,index) => ({index,id:'direct-'+index,type:'function',function:{name,arguments:'{}'}}));
-  else if ((actionIndex === 1 && paths.length >= 2) || (direct && actionIndex === 2)) toolCalls = [{index:0,id:'fixture-execute',type:'function',function:{name:'execute',arguments:JSON.stringify({code: `${direct ? '' : `const results = await Promise.all([${paths.slice(0,2).map(name=>`${name}({})`).join(',')}]);`} ${shellCode} return 'compact fixture result';`})}}];
+  else if ((actionIndex === 1 && paths.length >= 2) || (direct && actionIndex === 2)) toolCalls = [{index:0,id:'fixture-execute',type:'function',function:{name:'execute',arguments:JSON.stringify({code: `${direct ? '' : `${orientationPaths.filter(Boolean).map(name => `await ${name}({});`).join(' ')} const results = await Promise.all([${paths.slice(0,2).map(name=>`${name}({})`).join(',')}]);`} ${shellCode} return 'compact fixture result';`})}}];
   else if (realSeat && logPath && !logged && system.includes('3+ state-changing')) {
     logged = true;
     toolCalls = [{index:0,id:'fixture-log',type:'function',function:{name:'execute',arguments:JSON.stringify({code:`return await ${logPath}({message:'Native OpenCode V2 fixture persisted log',to:'broadcast'});`})}}];
   }
   if (handoffPending && !handoffIssued) {
     handoffIssued = true;
-    const name = directNames.find(name => name.includes('read-log'));
-    const api = paths.find(name => name.includes('read-log'));
+    const name = directNames.find(name => name.includes('borg_read_log'));
+    const api = paths.find(name => name.includes('borg_read_log'));
     assert.ok(direct ? name : api, 'Human session discovers Borg read tool');
     toolCalls = [{ index: 0, id: 'human-handoff-read', type: 'function', function: direct
       ? { name, arguments: '{}' } : { name: 'execute', arguments: JSON.stringify({ code: `return await ${api}({});` }) } }];
@@ -192,7 +193,8 @@ try {
     assert.ok(environments.every(value => value.value === 'native-env-expanded' && value.file === 'native-file-expanded' && value.rootPasswordPresent === false),
       'Borg receives native-expanded inline env/file values without root API credentials');
     const calls = readFileSync(callsPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-    assert.deepEqual(calls.map(call => call.name).sort(), ['borg_read-log', 'borg_roster']);
+    assert.deepEqual(calls.map(call => call.name).sort(), direct ? ['borg_read_log', 'borg_roster'] : ['borg_playbook', 'borg_read_log', 'borg_role', 'borg_roster']);
+    if (!direct) assert.deepEqual(calls.slice(0, 3).map(call => call.name), ['borg_role', 'borg_playbook', 'borg_read_log']);
     assert.ok(calls.every(call => call.meta?.['ai.opencode/sessionID'] === descriptor.sessionID));
     assert.ok((await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('3+ state-changing'), 'Nested shell operations counted once each');
     await callOpenCodeV2Broker(descriptor, '/logged', { sessionID: descriptor.sessionID });
@@ -327,9 +329,9 @@ try {
     handoffPending = false;
     assert.equal((await callOpenCodeV2Broker(descriptor, '/status')).sessionID, human.id);
     const updated = await nativeClient.session.get({ sessionID: human.id });
-    assert.equal(effectiveOpenCodeV2Permission(updated.permissions ?? [], 'borg_borg_read-log'), 'allow');
+    assert.equal(effectiveOpenCodeV2Permission(updated.permissions ?? [], 'borg_borg_read_log'), 'allow');
     const newCalls = readFileSync(callsPath, 'utf8').trim().split('\n').slice(before).map(line => JSON.parse(line));
-    assert.ok(newCalls.some(call => call.name === 'borg_read-log' && call.meta?.['ai.opencode/sessionID'] === human.id), 'First Borg call in a human-selected root receives launch policy');
+    assert.ok(newCalls.some(call => call.name === 'borg_read_log' && call.meta?.['ai.opencode/sessionID'] === human.id), 'First Borg call in a human-selected root receives launch policy');
   }
   tui.kill(); await launch.cleanup(); launch = undefined;
   await assert.rejects(callOpenCodeV2Broker(descriptor, '/status'));
@@ -348,6 +350,13 @@ try {
     const generatedBefore = requests.length;
     await assert.rejects(launchOpenCodeV2Process({ ...launchOptions, passthroughArgs: ['--session', Session.ID.create()] }), /could not be resumed/);
     assert.equal(requests.length, generatedBefore, 'A missing resume target never submits a replacement kickoff');
+    const legacyPolicyConfig = { ...JSON.parse(env.OPENCODE_CONFIG_CONTENT), policies: [
+      { action: 'tool.use', resource: 'borg_borg_read-log:*', effect: 'deny' },
+    ] };
+    await assert.rejects(launchOpenCodeV2Process({ ...launchOptions,
+      env: { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify(legacyPolicyConfig) },
+    }), /tool-name migration required/, 'A legacy hard policy is refused before its target can disappear');
+    assert.equal(requests.length, generatedBefore, 'A policy migration refusal never submits a kickoff');
   }
 } catch (error) {
   console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12), nativePlugins, providerSteps: providerSteps.slice(-6) }));

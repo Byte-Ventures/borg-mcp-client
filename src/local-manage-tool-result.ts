@@ -43,7 +43,7 @@ export function formatLocalManageToolResult(error: unknown) {
           `Requested operation: ${context}\n\n` +
           'No role text was changed by this request. ' +
           `Read the current role with \`borg_role\` using role id ${safeOperationValue(roleId)}, ` +
-          'then retry `borg_patch-role-section` against that current text.',
+          'then retry `borg_patch_role_section` against that current text.',
       }],
       isError: true as const,
     };

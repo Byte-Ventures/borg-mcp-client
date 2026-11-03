@@ -19,7 +19,7 @@
  *   - Outer `runLoop` reconnects with exponential backoff on any
  *     stream-level error, including heartbeat watchdog firing.
  *
- * State exposed via `getStreamStatus()` so the `borg_stream-status`
+ * State exposed via `getStreamStatus()` so the `borg_stream_status`
  * MCP tool can probe without perturbing the stream (no second
  * connection, no second auth — just an in-process state snapshot).
  */
@@ -161,7 +161,7 @@ export const INBOX_TAIL_LINES_CAP = 512;
 export const INBOX_TAIL_TRIM_THRESHOLD_LINES = INBOX_TAIL_LINES_CAP * 2;
 
 // ------------------------------------------------------------------
-// Probeable status (read by the `borg_stream-status` MCP tool)
+// Probeable status (read by the `borg_stream_status` MCP tool)
 // ------------------------------------------------------------------
 
 export type RunLoopHealth = 'connected' | 'reconnecting' | 'silent-inert' | 'never-started';
@@ -699,7 +699,7 @@ export async function streamOnce(
   onEventId: (id: string) => void,
   deps: StreamDeps = {}
 ): Promise<void> {
-  // A representative consumer must never alter borg_stream-status's singleton.
+  // A representative consumer must never alter borg_stream_status's singleton.
   const state = deps.consumer ? { ...streamState } : streamState;
   const {
     fetchImpl,
@@ -1245,7 +1245,7 @@ export async function streamOnce(
 
         // Local-server ActivityHub publishes the transparent shared log to
         // every cube stream. `visibility:direct` is routing/wake metadata, not
-        // a read ACL: borg_read-log still returns the entry to every member,
+        // a read ACL: borg_read_log still returns the entry to every member,
         // while only an addressed drone writes it to its inbox and wakes. A
         // malformed direct frame with no matching recipient fails closed in
         // the wake direction (cursor advances; no cube-wide wake storm).

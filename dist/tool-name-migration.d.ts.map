@@ -1,0 +1,1 @@
+{"version":3,"file":"tool-name-migration.d.ts","sourceRoot":"","sources":["../src/tool-name-migration.ts"],"names":[],"mappings":"AAEA,MAAM,MAAM,cAAc,GAAG,QAAQ,GAAG,OAAO,GAAG,UAAU,CAAC;AAE7D,qBAAa,sBAAuB,SAAQ,KAAK;gBACnC,IAAI,EAAE,cAAc,EAAE,MAAM,EAAE,MAAM;CAIjD;AAoBD;;iFAEiF;AACjF,wBAAgB,8BAA8B,CAAC,IAAI,EAAE,cAAc,EAAE,MAAM,EAAE,OAAO,GAAG,IAAI,CA4B1F"}

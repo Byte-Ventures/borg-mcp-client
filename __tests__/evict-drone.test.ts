@@ -1,11 +1,11 @@
 /**
- * Tests for the `borg_evict-drone` label→id resolver (gh#718).
+ * Tests for the `borg_evict_drone` label→id resolver (gh#718).
  *
  * The local eviction route takes a drone UUID, but Coordinators see drone
  * LABELS everywhere (roster,
  * regen, cube log) and rarely the UUIDs. `resolveDroneIdByLabel` lets the tool
  * accept a label and resolve it to a drone id client-side against the
- * cube-grant-scoped detail (getCube), mirroring how borg_list-drones surfaces
+ * cube-grant-scoped detail (getCube), mirroring how borg_list_drones surfaces
  * id+label pairs. Pure-function tests; no MCP server, no live worker.
  */
 

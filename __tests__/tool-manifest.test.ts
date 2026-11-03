@@ -76,25 +76,25 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
       'borg_regen',
       'borg_assimilate',
       'borg_log',
-      'borg_read-log',
-      'borg_read-entry',
+      'borg_read_log',
+      'borg_read_entry',
       'borg_ack',
-      'borg_ack-status',
+      'borg_ack_status',
       'borg_decide',
-      'borg_remove-decision',
+      'borg_remove_decision',
       'borg_decisions',
       'borg_roster',
-      'borg_put-document',
-      'borg_get-document',
-      'borg_list-documents',
-      'borg_remove-document',
+      'borg_put_document',
+      'borg_get_document',
+      'borg_list_documents',
+      'borg_remove_document',
     ]) {
       expect(names).toContain(required);
     }
   });
 
   it('exposes strict read-only acknowledgement-status discovery', () => {
-    const tool = TOOL_MANIFEST.find((entry) => entry.name === 'borg_ack-status');
+    const tool = TOOL_MANIFEST.find((entry) => entry.name === 'borg_ack_status');
     expect(tool?.inputSchema.required).toEqual(['entry_id']);
     expect(tool?.inputSchema.properties).toEqual({
       entry_id: {
@@ -105,12 +105,12 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     });
     expect(tool?.description).toContain('Activity-log silence is not evidence');
     expect(tool?.description).toContain('preserves unread cursors');
-    expect(clientEntrySource).toContain("case 'borg_ack-status':");
+    expect(clientEntrySource).toContain("case 'borg_ack_status':");
     expect(clientEntrySource).toContain('getAckStatus(');
   });
 
   it('exposes exact cursorless entry reads and structured routing guidance', () => {
-    const readEntry = TOOL_MANIFEST.find((entry) => entry.name === 'borg_read-entry');
+    const readEntry = TOOL_MANIFEST.find((entry) => entry.name === 'borg_read_entry');
     expect(readEntry?.inputSchema.required).toEqual(['entry_id']);
     expect(readEntry?.inputSchema.properties.entry_id).toMatchObject({
       type: 'string',
@@ -118,7 +118,7 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     });
     expect(readEntry?.description).toContain('without changing the unread cursor');
     expect(readEntry?.description).toContain('unique 8-hex prefix');
-    expect(clientEntrySource).toContain("case 'borg_read-entry':");
+    expect(clientEntrySource).toContain("case 'borg_read_entry':");
     expect(clientEntrySource).toContain('readLogEntry(');
 
     const log = TOOL_MANIFEST.find((entry) => entry.name === 'borg_log');
@@ -149,7 +149,7 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     });
     expect(JSON.stringify(log?.inputSchema.properties.refs)).not.toMatch(/oneOf|anyOf|allOf/);
 
-    for (const name of ['borg_update-cube', 'borg_patch-taxonomy-class']) {
+    for (const name of ['borg_update_cube', 'borg_patch_taxonomy_class']) {
       const schema = TOOL_MANIFEST.find((entry) => entry.name === name)?.inputSchema;
       expect(JSON.stringify(schema)).not.toMatch(/default_to|"routing"/);
       expect(JSON.stringify(schema)).toContain('lifecycle');
@@ -188,14 +188,14 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
   });
 
   it('exposes strict document schemas and structured log citations', () => {
-    const put = TOOL_MANIFEST.find((tool) => tool.name === 'borg_put-document');
+    const put = TOOL_MANIFEST.find((tool) => tool.name === 'borg_put_document');
     expect(put?.inputSchema.required).toEqual(['title', 'content_type', 'content']);
     expect(put?.inputSchema.properties.content_type.enum).toEqual(['text/markdown', 'text/plain']);
     expect(put?.inputSchema.properties).toHaveProperty('supersedes');
-    for (const name of ['borg_get-document', 'borg_remove-document']) {
+    for (const name of ['borg_get_document', 'borg_remove_document']) {
       expect(TOOL_MANIFEST.find((tool) => tool.name === name)?.inputSchema.required).toEqual(['id']);
     }
-    expect(TOOL_MANIFEST.find((tool) => tool.name === 'borg_list-documents')?.inputSchema.properties)
+    expect(TOOL_MANIFEST.find((tool) => tool.name === 'borg_list_documents')?.inputSchema.properties)
       .toEqual({});
     expect(TOOL_MANIFEST.find((tool) => tool.name === 'borg_log')?.inputSchema.properties.documents)
       .toMatchObject({ type: 'array', maxItems: 100 });
@@ -220,7 +220,7 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(assimilate).toContain('never creates drones');
     expect(assimilate).toContain('run `borg assimilate` in a terminal');
 
-    const createCube = TOOL_MANIFEST.find((tool) => tool.name === 'borg_create-cube');
+    const createCube = TOOL_MANIFEST.find((tool) => tool.name === 'borg_create_cube');
     expect(createCube?.inputSchema.properties.cube_directive.description)
       .toContain('refreshes cube context');
   });
@@ -245,15 +245,15 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
   });
 
   it('describes silent wake failures through the inbox Monitor, not /loop', () => {
-    for (const toolName of ['borg_roster', 'borg_stream-status']) {
+    for (const toolName of ['borg_roster', 'borg_stream_status']) {
       const description = TOOL_MANIFEST.find((entry) => entry.name === toolName)?.description ?? '';
       expect(description).toMatch(/inbox Monitor|inbox-Monitor/);
       expect(description).not.toContain('/loop');
     }
   });
 
-  it('borg_remove-decision exposes its exactly-one selector contract', () => {
-    const tool = TOOL_MANIFEST.find((entry) => entry.name === 'borg_remove-decision');
+  it('borg_remove_decision exposes its exactly-one selector contract', () => {
+    const tool = TOOL_MANIFEST.find((entry) => entry.name === 'borg_remove_decision');
     expect(tool?.inputSchema.oneOf).toEqual([{ required: ['topic'] }, { required: ['decision_id'] }]);
     expect(tool?.inputSchema.properties).toHaveProperty('topic');
     expect(tool?.inputSchema.properties).toHaveProperty('decision_id');
@@ -270,19 +270,19 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
   });
 
   it('keeps cube tool schemas aligned with supported name contracts', () => {
-    const create = TOOL_MANIFEST.find((entry) => entry.name === 'borg_create-cube');
+    const create = TOOL_MANIFEST.find((entry) => entry.name === 'borg_create_cube');
     expect(create?.inputSchema.properties.name).toMatchObject({
       pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]*$',
       maxLength: 120,
     });
 
-    const update = TOOL_MANIFEST.find((entry) => entry.name === 'borg_update-cube');
+    const update = TOOL_MANIFEST.find((entry) => entry.name === 'borg_update_cube');
     expect(update?.description).not.toMatch(/name/i);
     expect(update?.inputSchema.properties).not.toHaveProperty('name');
   });
 
   it('role tools do not advertise retired model selection (gh#1019)', () => {
-    for (const toolName of ['borg_create-role', 'borg_update-role']) {
+    for (const toolName of ['borg_create_role', 'borg_update_role']) {
       const tool = TOOL_MANIFEST.find((entry) => entry.name === toolName);
       expect(tool, `${toolName} must remain in the canonical manifest`).toBeDefined();
       expect(tool!.inputSchema.properties).not.toHaveProperty('default_model');
@@ -291,8 +291,8 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
   });
 
   it('drone management tools describe local manage authority and retained attribution', () => {
-    const reassign = TOOL_MANIFEST.find((entry) => entry.name === 'borg_reassign-drone');
-    const evict = TOOL_MANIFEST.find((entry) => entry.name === 'borg_evict-drone');
+    const reassign = TOOL_MANIFEST.find((entry) => entry.name === 'borg_reassign_drone');
+    const evict = TOOL_MANIFEST.find((entry) => entry.name === 'borg_evict_drone');
     expect(reassign?.description).toContain('cube-management grant');
     expect(reassign?.description).toContain('workflow labels, not server permissions');
     expect(evict?.description).toContain('cube-management grant');
@@ -301,7 +301,7 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
   });
 
   it('requires explicit cube-deletion confirmation in the schema and handler', () => {
-    const deletion = TOOL_MANIFEST.find((entry) => entry.name === 'borg_delete-cube');
+    const deletion = TOOL_MANIFEST.find((entry) => entry.name === 'borg_delete_cube');
     expect(deletion?.inputSchema.properties.confirm_cube_id).toMatchObject({
       type: 'string',
       description: expect.stringMatching(/explicit user confirmation.*exact cube UUID/i),
@@ -309,15 +309,15 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(deletion?.inputSchema.required).toContain('confirm_cube_id');
 
     const handler = clientEntrySource.slice(
-      clientEntrySource.indexOf("case 'borg_delete-cube':"),
-      clientEntrySource.indexOf("case 'borg_create-role':"),
+      clientEntrySource.indexOf("case 'borg_delete_cube':"),
+      clientEntrySource.indexOf("case 'borg_create_role':"),
     );
     expect(handler).toMatch(/confirmCubeId !== cubeId/);
     expect(handler.indexOf('confirmCubeId !== cubeId')).toBeLessThan(handler.indexOf('deleteCube('));
   });
 
   it('describes apply and sync as non-atomic client orchestration over managed primitives', () => {
-    for (const toolName of ['borg_apply-template', 'borg_sync-roles']) {
+    for (const toolName of ['borg_apply_template', 'borg_sync_roles']) {
       const description = TOOL_MANIFEST.find((entry) => entry.name === toolName)?.description ?? '';
       expect(description).toContain('client-orchestrated');
       expect(description).toContain('primitives');
@@ -330,7 +330,7 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
   });
 
   it('publishes the flat role-name contract for create and update', () => {
-    for (const toolName of ['borg_create-role', 'borg_update-role']) {
+    for (const toolName of ['borg_create_role', 'borg_update_role']) {
       const name = TOOL_MANIFEST.find((entry) => entry.name === toolName)?.inputSchema.properties.name;
       expect(name).toMatchObject({
         type: 'string',
@@ -346,7 +346,7 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     const errorCopy = [...clientEntrySource.matchAll(/Pass at least one of:[^']+/g)]
       .map((match) => match[0])
       .find((copy) => copy.includes('short_description'));
-    expect(errorCopy, 'borg_update-role must retain actionable empty-update guidance').toBeDefined();
+    expect(errorCopy, 'borg_update_role must retain actionable empty-update guidance').toBeDefined();
     expect(errorCopy).not.toContain('default_model');
   });
 

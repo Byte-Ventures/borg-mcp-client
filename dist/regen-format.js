@@ -94,7 +94,7 @@ export function wakePathSteps(agentKind) {
     if (agentKind === 'codex') {
         return [
             'Required Codex wake path: Borg activity stream → inbox wake channel via app-server remote control.',
-            'On every wake, run `borg_read-log unread_only=true` and drain until caught up.',
+            'On every wake, run `borg_read_log unread_only=true` and drain until caught up.',
             'No additional scheduler setup is required.',
             'Degraded fallback (only if remote control is unavailable): on return, call `borg_regen mode="full"` and drain unread log.',
         ].join(' ');
@@ -105,7 +105,7 @@ export function wakePathSteps(agentKind) {
     return [
         'Arm your wake path before working:',
         '1. **Inbox Monitor** — run a persistent Monitor on the **Monitor command** below; cube posts wake you.',
-        '2. **On every wake** — drain `borg_read-log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
+        '2. **On every wake** — drain `borg_read_log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
         `3. **Monitor recovery** — on its exit notification, or when none is armed: ${CLAUDE_MONITOR_REARM_THEN_DRAIN}`,
         `4. **Monitor not armed** — ${CLAUDE_MONITOR_LOOP_FALLBACK} ${CLAUDE_MONITOR_DENIED_FALLBACK}`,
     ].join('\n');
@@ -119,7 +119,7 @@ export function claudeMonitorCommandLine(inboxPath, monitorStateRoot) {
     return `**Monitor command:** \`${claudeMonitorCommand(inboxPath, monitorStateRoot)}\``;
 }
 /** Used in place of the command when it would not fit the lean budget. */
-export const CLAUDE_MONITOR_COMMAND_POINTER = '**Monitor command:** in `borg_stream-status` (too long here).';
+export const CLAUDE_MONITOR_COMMAND_POINTER = '**Monitor command:** in `borg_stream_status` (too long here).';
 /**
  * The SessionStart hook's output is shown through a preview of about 2 KB.
  * The lean orientation is always strictly shorter than this many UTF-8 bytes.
@@ -225,7 +225,7 @@ export function formatLeanOrientation(args) {
             : agentKind === 'claude'
                 ? [
                     '\n_(`/clear` cleared Claude\'s conversation — re-arm the inbox Monitor now.)_',
-                    '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, re-arm the Monitor, then drain the unread log._\n',
+                    '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream_status` + `borg_roster`; call `borg_regen mode="full"`, re-arm the Monitor, then drain the unread log._\n',
                 ].join('\n')
                 : '\n_(OpenCode started a new session; Borg supplied this orientation automatically.)_\n'
         : '';
@@ -309,10 +309,10 @@ export function markArrivalAnnouncedThisProcess() {
 //   review gate; this inline marker pins the param so the #490/#529 copy↔
 //   mechanism guard verifies borg_ack actually exposes `kind`
 //   (client/__tests__/copy-mechanism-guard.test.ts).
-// copy-param-claim: borg_ack-status.entry_id
+// copy-param-claim: borg_ack_status.entry_id
 //   The playbook below directs uncertain receipt checks through the read-only
 //   acknowledgement-status query; this marker pins its required entry id.
-// copy-param-claim: borg_read-entry.entry_id
+// copy-param-claim: borg_read_entry.entry_id
 // copy-param-claim: borg_log.to
 // copy-param-claim: borg_log.refs
 // copy-param-claim: borg_docs.topic
@@ -322,7 +322,7 @@ export function markArrivalAnnouncedThisProcess() {
 export function getDronePlaybook(handoverMode = 'origin') {
     const arrivalInstruction = arrivalAnnouncedThisProcess
         ? ''
-        : `\n**Required one-time startup setup:** If this instruction is visible, immediately call \`borg_log message="ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}" to="broadcast"\` before unread-log triage. This is the sole exception to no-work log silence. Do not infer your startup state from peers' \`ARRIVAL:\` entries. After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit \`/mcp\` reconnect may show it again. The log call suppresses repeat ARRIVAL for a known agent session across reconnects; unknown identity announces. Claude identity can be stale after a resume whose SessionStart hook failed. Inspect \`borg_stream-status\` for the identity source and observation age.\n`;
+        : `\n**Required one-time startup setup:** If this instruction is visible, immediately call \`borg_log message="ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}" to="broadcast"\` before unread-log triage. This is the sole exception to no-work log silence. Do not infer your startup state from peers' \`ARRIVAL:\` entries. After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit \`/mcp\` reconnect may show it again. The log call suppresses repeat ARRIVAL for a known agent session across reconnects; unknown identity announces. Claude identity can be stale after a resume whose SessionStart hook failed. Inspect \`borg_stream_status\` for the identity source and observation age.\n`;
     const reviewReadyRefs = handoverMode === 'local'
         ? '["HEAD"]'
         : '["HEAD","origin/<branch>","origin/main"]';
@@ -335,13 +335,13 @@ You're a Drone in a Cube. Coordinate with other drones through the activity log.
 
 **User asks how Borg MCP works** — a feature, setup, pricing, or concept question? Call \`borg_docs {topic}\` for the documentation index, then WebFetch the matching section URL and answer from the page. Don't guess borgmcp's own behavior from memory.
 
-**Tools:**
-- \`borg_regen\` — refresh full state (your role, roster, unread-log COUNT, and fetch-on-demand pointers) in one call; the cube directive (→ \`borg_cube\`), the operating-playbook detail (→ \`borg_playbook\`), and the recent-log payload (→ \`borg_read-log\` when count >0) are NOT inlined — fetch them on demand
+**Tools:** Names use underscores throughout. If a saved role mentions a hyphenated name, rediscover its canonical name or use \`borg_tool\` with the quoted legacy name; never use a hyphenated JavaScript dot expression.
+- \`borg_regen\` — refresh full state (your role, roster, unread-log COUNT, and fetch-on-demand pointers) in one call; the cube directive (→ \`borg_cube\`), the operating-playbook detail (→ \`borg_playbook\`), and the recent-log payload (→ \`borg_read_log\` when count >0) are NOT inlined — fetch them on demand
 - \`borg_cube\` — re-read the cube directive and the role overview
 - \`borg_role\` — re-read your role's detailed playbook
 - \`borg_roster\` — see who else is connected
-- \`borg_read-log unread_only=true [limit]\` — drain unread log entries from your server-side cursor
-- \`borg_read-entry entry_id=<id>\` — read one known complete entry without moving the unread cursor
+- \`borg_read_log unread_only=true [limit]\` — drain unread log entries from your server-side cursor
+- \`borg_read_entry entry_id=<id>\` — read one known complete entry without moving the unread cursor
 - \`borg_log message="<message>" to="broadcast"|["<selector>"] refs=${reviewReadyRefs}\` — append with an explicit audience and optional mechanically resolved Git provenance; REVIEW-READY requires \`refs\`
 - \`borg_assimilate <cube>\` — switch to a different cube
 
@@ -356,7 +356,7 @@ You're a Drone in a Cube. Coordinate with other drones through the activity log.
 **Default: act autonomously, coordinate through the log.** Don't wait for user input. Need input → post the question, continue other work, other drones respond. The human supervisor is reachable through your cube's coordinating / human-seat role (the role your cube designates for direction + integration), or the Queen role when the seat is delegated to a drone — one continuous seat. Your role's \`detailed_description\` says when to escalate + which decisions need human input; follow it.
 ${arrivalInstruction}
 **Operating loop — each wake, in order:**
-1. Drain unread: \`borg_read-log unread_only=true\` (oldest-first, repeat until \`behind_by=0\`) before acting. The "Cube log" section gives your UNREAD COUNT.
+1. Drain unread: \`borg_read_log unread_only=true\` (oldest-first, repeat until \`behind_by=0\`) before acting. The "Cube log" section gives your UNREAD COUNT.
 2. Peer \`ARRIVAL:\` and \`READY\`-only entries are lifecycle-only and non-actionable. Do not reply to them. Apply your role's conventions to other entries.
 3. Actionable signal → act + post the convention. Don't wait to be asked.
 4. User prompt waiting → respond, informed by cube context; log substantive units (shipped changes, blockers, findings) regardless of who initiated.
@@ -364,13 +364,13 @@ ${arrivalInstruction}
    or a status reply must never be the last action of a turn while work is outstanding.
 6. After required startup ARRIVAL is handled, if no interrupted or assigned work and no user prompt remains, make no reply/status/liveness \`borg_log\`. Wait.
 
-**On a \`<task-notification>\` wake:** the payload is a truncatable preview; the full entry is in the DB. Drain: \`borg_read-log unread_only=true limit=20\`, repeat until \`behind_by=0\`. If you later need one known entry's complete body, call \`borg_read-entry entry_id=<id>\`. Do NOT triage with \`since=<notification timestamp>\` (strict-after — skips the boundary entry) or a bare window (skips older-unread during bursts).
+**On a \`<task-notification>\` wake:** the payload is a truncatable preview; the full entry is in the DB. Drain: \`borg_read_log unread_only=true limit=20\`, repeat until \`behind_by=0\`. If you later need one known entry's complete body, call \`borg_read_entry entry_id=<id>\`. Do NOT triage with \`since=<notification timestamp>\` (strict-after — skips the boundary entry) or a bare window (skips older-unread during bursts).
 
 **When a log entry asks you to act:** if its explicit \`to\` audience includes your drone and its message assigns you work or directly asks you to act, call \`borg_ack entry_id=<id>\` within ~60s. Use the \`borg_ack\` TOOL, not an in-band \`ACK:\` post (it records a queryable flag + wakes the author's Monitor + keeps the log clean). Ack = receipt, not completion (\`STARTING\` / \`DONE\` still apply). Ack actionable assignments and direct action requests only — not every addressed entry or mention.
 
 **Claim a work item before you start it (\`borg_ack ... kind=claim\`):** \`borg_ack\` has two kinds — \`ack\` (receipt, the default) and \`claim\` (advisory ownership of a routed work item you are about to take). When a routed entry could be picked up by more than one drone, \`borg_ack entry_id=<id> kind=claim\` BEFORE starting — it announces you are taking it so peers skip the duplicate work, and wakes the rest of the entry's audience. If a live peer already holds the claim, skip it; if the claim is STALE (the claimant went silent past the wake-path SLA), re-claim and proceed. A claim is ADVISORY only — it NEVER substitutes for the completion or approval signal your role's conventions require; a bogus or abandoned claim can at most delay a work item, never bypass its real gate.
 
-**When receipt is uncertain:** activity-log silence is not evidence that acknowledgement is missing. Call \`borg_ack-status entry_id=<id>\`; it reports acknowledgements and advisory claims separately without acknowledging or claiming the entry and without advancing unread cursors.
+**When receipt is uncertain:** activity-log silence is not evidence that acknowledgement is missing. Call \`borg_ack_status entry_id=<id>\`; it reports acknowledgements and advisory claims separately without acknowledging or claiming the entry and without advancing unread cursors.
 
 **When stuck:** post your blocker per your role's conventions, continue other work. Escalation is per your role detail, not by stalling.
 
@@ -453,13 +453,13 @@ Any time you make a factual claim that could be verified — "this shipped as ve
 - Prod state → \`curl https://<endpoint>\` or \`wrangler tail --env production\`
 - npm registry state → \`npm view <package>@<version>\` or \`npm view <package>@latest\`
 - DB state → query through the existing \`db\` interface; never trust a doc claim about row counts / column values
-- Cube log state → \`borg_read-log unread_only=true\` for wake triage, draining until \`behind_by=0\`; don't cite from memory or from another drone's summary
+- Cube log state → \`borg_read_log unread_only=true\` for wake triage, draining until \`behind_by=0\`; don't cite from memory or from another drone's summary
 - Ratified cube decision → \`borg_decisions {topic}\` — cite the registry's active decision by topic; NEVER restate a ratified decision from memory (a memory restatement drifts on the axis). A ratified decision is a first-class verifiable claim type with its own source of truth: the active registry entry. Recording one is \`borg_decide\`: Coordinator/Queen are workflow-eligible to ratify, but role labels grant no server permission; the selected local client needs a live cube-manage grant.
 
 **Durable layers:**
 1. Decision registry (\`borg_decide\` / \`borg_decisions\`): choices between alternatives that could be revisited, cited by topic, served into every drone's context, capped at 16,384 active bytes per cube.
-2. Cube directive (\`borg_update-cube\`): standing operating rules and conventions, served every session, not capped like the registry.
-3. Cube documents (\`borg_put-document\` / \`borg_get-document\`): large or detailed material — contracts, designs, evidence — cited by id, never inlined.
+2. Cube directive (\`borg_update_cube\`): standing operating rules and conventions, served every session, not capped like the registry.
+3. Cube documents (\`borg_put_document\` / \`borg_get_document\`): large or detailed material — contracts, designs, evidence — cited by id, never inlined.
 4. Repository \`AGENTS.md\`: rules specific to one repository, read only by seats working there.
 
 Rules: a registry entry that records a rule rather than a choice belongs in the directive — move it and remove the registry copy; on a cap refusal the order is relocate rules → supersede stale choices → remove obsolete; never archive playbook prose in the registry; detail goes to a document and is cited.
@@ -473,7 +473,7 @@ The discipline applies at FOUR surfaces. Catches at the surface closest to origi
 - **Surface 1 (brainstorm-proposal time)**: when a brainstorm contribution names specific code identifiers / API field names / enum values / column names / function signatures, the PROPOSING drone source-grep's the referenced file BEFORE composing the proposal. ${proposalRef}; working-tree grep is only for explicitly local/uncommitted claims. Cheapest catch surface; one drone catches one error.
 - **Surface 2 (comment/JSDoc/docstring writing time)**: when an implementation comment cites cross-file invariants (other modules' thresholds, schema columns, enum values, semantic contracts), the WRITING drone source-grep's the referenced file BEFORE writing the comment. ${commentRef}; don't let a stale local checkout stand in for the ref being described. Mid-cost catch; one drone catches one error but downstream reviewers may inherit the wrong mental model from the comment.
 - **Surface 3 (review-time verification)**: the existing review-class discipline (Code Reviewer formal gates + Security Auditor SR gates + PM/UX/QA courtesy reviews). Late catch opportunity; if the error propagated through Surfaces 1 + 2, multiple reviewers may have already trusted the framing instead of source-grepping themselves.
-- **Surface 4 (durable-tracking-artifact-writing time)**: when filing a deferred-tracking issue from a cube event payload, the FILING drone fetches the originating entry's full body with \`borg_read-entry entry_id=<id>\` BEFORE composing the issue body. For routine wake triage, use \`borg_read-log unread_only=true\` and drain until caught up; do not rely on a truncated event preview or a \`since=<same timestamp>\` read, which can skip the boundary entry. Cube event previews can truncate substantive content (mid-paragraph cuts on long entries); filing from the truncated preview trusts a derivative artifact instead of the source-of-truth full entry. Most expensive surface — the filed issue becomes the cube's durable cross-cycle memory; correcting it requires a follow-up correction post, and later pickup drones inherit the incomplete framing if the correction is missed.
+- **Surface 4 (durable-tracking-artifact-writing time)**: when filing a deferred-tracking issue from a cube event payload, the FILING drone fetches the originating entry's full body with \`borg_read_entry entry_id=<id>\` BEFORE composing the issue body. For routine wake triage, use \`borg_read_log unread_only=true\` and drain until caught up; do not rely on a truncated event preview or a \`since=<same timestamp>\` read, which can skip the boundary entry. Cube event previews can truncate substantive content (mid-paragraph cuts on long entries); filing from the truncated preview trusts a derivative artifact instead of the source-of-truth full entry. Most expensive surface — the filed issue becomes the cube's durable cross-cycle memory; correcting it requires a follow-up correction post, and later pickup drones inherit the incomplete framing if the correction is missed.
 
 **Ratified-decision drift is a four-surface drift-class.** A ratified cube decision restated from memory drifts exactly like a code-identifier claim — it propagates dispatch (Surface 1, brainstorm) → copy (Surface 2, comment) → gate (Surface 3, review), and the cheapest catch is at the brainstorm surface. At each surface, a drone restating a ratified decision source-reads \`borg_decisions {topic}\` FIRST: the active registry entry is the source of truth; your memory is a derivative artifact. Core rule — **cite ratified decisions by topic; never restate one from memory.**
 
@@ -521,12 +521,12 @@ export function nullTaxonomyTip(messageTaxonomy) {
         (Array.isArray(messageTaxonomy) && messageTaxonomy.length === 0);
     if (!isEmpty)
         return '';
-    // copy-param-claim: borg_update-cube.message_taxonomy
+    // copy-param-claim: borg_update_cube.message_taxonomy
     //   The tip says "with a taxonomy array" rather than the literal param name;
     //   this inline marker pins the real inputSchema param so the #490/#529 guard
     //   (client/__tests__/copy-mechanism-guard.test.ts) verifies the tool actually
     //   exposes it — the #479 miss class, now caught co-located with the copy.
-    return 'Tip: no message taxonomy declared — set one to classify signal prefixes and dispatch/completion lifecycle. Every borg_log call still requires an explicit to audience. Use borg_update-cube with a taxonomy array, or add classes with borg_patch-taxonomy-class.';
+    return 'Tip: no message taxonomy declared — set one to classify signal prefixes and dispatch/completion lifecycle. Every borg_log call still requires an explicit to audience. Use borg_update_cube with a taxonomy array, or add classes with borg_patch_taxonomy_class.';
 }
 export function regenWakePathDroneLabel(result, cachedDroneLabel) {
     return result.drone?.label ?? cachedDroneLabel ?? null;
@@ -544,10 +544,10 @@ function safetyDisciplinesForRole(detailedDescription) {
     return [...UNIVERSAL_SAFETY_DISCIPLINES, ...roleScoped];
 }
 export function formatRationalePointer(role, section) {
-    return `rationale → borg_role-rationale ${JSON.stringify(role)} ${JSON.stringify(section)}`;
+    return `rationale → borg_role_rationale ${JSON.stringify(role)} ${JSON.stringify(section)}`;
 }
 export function parseRationalePointer(stub) {
-    const match = stub.match(/borg_role-rationale\s+("(?:(?:\\.)|[^"\\])*")\s+("(?:(?:\\.)|[^"\\])*")/);
+    const match = stub.match(/borg_role[_-]rationale\s+("(?:(?:\\.)|[^"\\])*")\s+("(?:(?:\\.)|[^"\\])*")/);
     if (!match)
         return null;
     try {
@@ -627,10 +627,10 @@ export function formatRegenMarkdown(result, opts = {}) {
     // instruction without a number rather than crashing — never inlines a payload.
     const unread = typeof result.behind_by === 'number' ? result.behind_by : null;
     const cubeLogSection = unread === null
-        ? 'Call `borg_read-log unread_only=true` to check for and drain any unread log entries (the log payload is not inlined in regen).'
+        ? 'Call `borg_read_log unread_only=true` to check for and drain any unread log entries (the log payload is not inlined in regen).'
         : unread > 0
             ? `You have **${unread}** unread log ${unread === 1 ? 'entry' : 'entries'}. ` +
-                'Drain them with `borg_read-log unread_only=true` (oldest-unread first; ' +
+                'Drain them with `borg_read_log unread_only=true` (oldest-unread first; ' +
                 'repeat until `behind_by=0`). The log payload is not inlined here — fetch on demand.'
             : "You're caught up — **0** unread log entries. No need to read the log right now.";
     const isEmptyCube = (unread ?? 0) === 0 && result.drones.length <= 1;
@@ -679,7 +679,7 @@ export function formatRegenMarkdown(result, opts = {}) {
     const roleTextHash = result.role.detailed_description_hash ?? null;
     // gh#496-A(b): full mode (and the lite emit-role-text branch) render the
     // COMPRESSED-core role text — `… rationale:` sections become on-demand
-    // borg_role-rationale stubs; rules + all safety stay inline. The lite
+    // borg_role_rationale stubs; rules + all safety stay inline. The lite
     // hash-gating path (shouldEmitRoleText, over the STORED detailed_description
     // hash) and the lite-omitted safety set below are unchanged.
     const roleText = result.role.detailed_description

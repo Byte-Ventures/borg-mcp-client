@@ -7,7 +7,7 @@ description: >-
   to the human representative. Runs `borg representative listen --protocol 2`
   inside the messaging gateway, injects a fixed, body-free prompt for each wake
   and reports whether Hermes accepted it; Borg decides every wake. Reply content
-  is only ever fetched by the conversation through borg_representative-read.
+  is only ever fetched by the conversation through borg_representative_read.
 license: Apache-2.0
 homepage: https://github.com/Byte-Ventures/borg-mcp-client
 tags: [borg, gateway, representative]

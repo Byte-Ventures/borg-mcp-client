@@ -11,6 +11,7 @@ import { startOpenCodeV2Server } from './opencode-v2-server.js';
 import { createOpenCodeV2Transport } from './opencode-v2-transport.js';
 import { startOpenCodeV2Broker, OPENCODE_V2_DESCRIPTOR_ENV, OPENCODE_V2_VERIFICATION_KEY_ENV, type OpenCodeV2Seat } from './opencode-v2-broker.js';
 import { installLaunchOpenCodePlugin, migrateLegacyOpenCodePlugin } from './opencode-launch-plugin.js';
+import { ToolNameMigrationError } from './tool-name-migration.js';
 import { selectOpenCodeAdapter } from './opencode-adapter.js';
 import { borgAgentConfigEnv, isCanonicalPath } from './private-root.js';
 import { openCodePrivateRoot, sameOpenCodeDirectory, openCodeWorktreeDirectory } from './opencode-private-state.js';
@@ -233,7 +234,7 @@ export async function launchOpenCodeV2Process(options: {
         if (installation.major !== 2) throw new Error('OpenCode changed major version during launch. Relaunch Borg.');
         continue;
       }
-      if (error instanceof OpenCodeV2LaunchError) throw error;
+      if (error instanceof OpenCodeV2LaunchError || error instanceof ToolNameMigrationError) throw error;
       throw new OpenCodeV2LaunchError(`OpenCode 2 failed during ${phase}. ${kickoffAttempted
         ? 'Kickoff admission is unconfirmed; inspect the session before submitting it again.'
         : 'No kickoff was submitted. Check the selected session and worktree, then relaunch Borg.'}`);

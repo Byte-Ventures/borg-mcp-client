@@ -129,7 +129,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_role-rationale',
+        name: 'borg_role_rationale',
         description: "Fetch exactly one named section from a role's detailed playbook using the current drone session. " +
             "Pass a role name/UUID and a plain-label section key. Role names and section keys match case-insensitively; UUIDs match exactly. Malformed selectors, ambiguous role names, and unknown roles/sections refuse. Returns the server's canonical role name, role_id, section heading, and the section body in full, refusing rather than truncating when it exceeds the server's role-text size limit, so a drone can read one section on demand instead of carrying the whole playbook in every borg_regen.",
         inputSchema: {
@@ -162,7 +162,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_stream-status',
+        name: 'borg_stream_status',
         description: "Diagnostic probe of the local SSE log-stream consumer: returns `connected`, `lastContentEventAt`, `lastWireActivityAt`, `lastHeartbeatAt`, `lastPersistedEventId`, `reconnectAttempts`, plus a wake-path check that flags if SSE is attached but no inbox Monitor is watching the file (the silent failure where incoming entries reach disk but do not wake the drone). Read-only in-process state; does NOT re-open the stream. Use when troubleshooting wake-ups or verifying the stream is alive.",
         inputSchema: {
             type: 'object',
@@ -171,14 +171,14 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_read-log',
+        name: 'borg_read_log',
         description: "Read entries from the cube's activity log. Each entry is tagged " +
             "with the drone that wrote it and that drone's role. For wake triage, prefer " +
             '`unread_only=true` with a modest limit and drain until `has_more=false`; ' +
             'this reads oldest-unread-first from your server cursor and ' +
             'advances the watermark so bursts are not skipped. A backlog above 50 returns a digest plus the newest 25 entries. Optional `since` is a strict-after ' +
             'cursor for explicit bounded reads only; do not use it with the same timestamp as a ' +
-            'notification preview because it can skip the boundary entry. Use `borg_read-entry` ' +
+            'notification preview because it can skip the boundary entry. Use `borg_read_entry` ' +
             'to fetch one known entry without changing the unread cursor.',
         inputSchema: {
             type: 'object',
@@ -199,8 +199,8 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_read-entry',
-        description: 'Read one complete activity-log entry by its canonical UUID or unique 8-hex prefix without changing the unread cursor. Returns the same entry shape and structured routing recipients as borg_read-log. Use borg_read-log unread_only=true for routine wake drains. Direct routing controls delivery and wakes, not read confidentiality inside the cube.',
+        name: 'borg_read_entry',
+        description: 'Read one complete activity-log entry by its canonical UUID or unique 8-hex prefix without changing the unread cursor. Returns the same entry shape and structured routing recipients as borg_read_log. Use borg_read_log unread_only=true for routine wake drains. Direct routing controls delivery and wakes, not read confidentiality inside the cube.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -233,7 +233,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_ack-status',
+        name: 'borg_ack_status',
         description: 'Read acknowledgement status for one activity-log entry without changing it. Returns per-recipient acknowledgements and advisory claims separately. Activity-log silence is not evidence that acknowledgement is missing; use this query instead. This read-only query does not acknowledge or claim the entry and preserves unread cursors.',
         inputSchema: {
             type: 'object',
@@ -283,7 +283,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_remove-decision',
+        name: 'borg_remove_decision',
         description: 'Remove one active ratified decision from the cube registry by topic or decision id. Coordinator/Queen are workflow-eligible, but their labels grant no server permission; the selected local client must have a live cube-manage grant. The decision stops appearing in borg_decisions and borg_regen while its audit record is retained.',
         inputSchema: {
             type: 'object',
@@ -302,7 +302,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_put-document',
+        name: 'borg_put_document',
         description: 'Create an immutable cube document containing Markdown or plain text. Use this for durable material that is too large or detailed for an activity-log message. Pass `supersedes` with the full prior document id to create its next linear revision; content is never edited in place. Requires the selected local client to have a live cube-write or cube-manage grant.',
         inputSchema: {
             type: 'object',
@@ -330,7 +330,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_get-document',
+        name: 'borg_get_document',
         description: 'Fetch one cube document by its full opaque id, including immutable content, revision links, state, author, and removal audit metadata. Exact-id reads retain removed content for audit. Requires a live cube-read, cube-write, or cube-manage grant.',
         inputSchema: {
             type: 'object',
@@ -341,12 +341,12 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_list-documents',
-        description: 'List active and superseded document metadata in the current cube. Removed documents are omitted; use borg_get-document with an exact known id for retained audit content. Document bodies are not included.',
+        name: 'borg_list_documents',
+        description: 'List active and superseded document metadata in the current cube. Removed documents are omitted; use borg_get_document with an exact known id for retained audit content. Document bodies are not included.',
         inputSchema: { type: 'object', properties: {}, required: [] },
     },
     {
-        name: 'borg_remove-document',
+        name: 'borg_remove_document',
         description: 'Mark one cube document removed while retaining its immutable content and audit metadata. The server permits the document author or a client with a live cube-manage grant; workflow role labels grant no permission. Idempotent for an already removed document.',
         inputSchema: {
             type: 'object',
@@ -393,14 +393,14 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_list-cubes',
+        name: 'borg_list_cubes',
         description: 'List every cube readable by this local client\'s live grants. Returns id, name, cube_directive, and timestamps for each. Useful before assimilate to see what\'s available, or as a starting point for an authorized management action.',
         inputSchema: { type: 'object', properties: {} },
     },
     {
-        name: 'borg_create-cube',
+        name: 'borg_create_cube',
         description: 'Create a new cube bound to an explicit repository. The server homes ONE cube per repository: if the given repository already has a cube, this reports that existing cube and leaves its directive unchanged (it never overwrites it). The server seeds the selected named template atomically; `software-dev` is selected by default. ' +
-            'Pass an optional `template` name to select another role set (see borg_list-templates / borg_apply-template).',
+            'Pass an optional `template` name to select another role set (see borg_list_templates / borg_apply_template).',
         inputSchema: {
             type: 'object',
             properties: {
@@ -430,7 +430,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_update-cube',
+        name: 'borg_update_cube',
         description: 'Update a cube\'s cube_directive and/or message_taxonomy. Pass only what changes.',
         inputSchema: {
             type: 'object',
@@ -439,7 +439,7 @@ const BASE_TOOL_MANIFEST = [
                 cube_directive: { type: 'string', description: 'New cube directive markdown (optional).' },
                 message_taxonomy: {
                     type: 'array',
-                    description: 'New classification/lifecycle taxonomy (optional). REPLACES the whole taxonomy; the server re-validates non-overlapping prefixes and unique class names. Pass [] to clear. To change ONE class without resending the whole array, use borg_patch-taxonomy-class instead. Optional lifecycle tags mark dispatch/completion classes for stuck-dispatch detection. Taxonomy never chooses log recipients.',
+                    description: 'New classification/lifecycle taxonomy (optional). REPLACES the whole taxonomy; the server re-validates non-overlapping prefixes and unique class names. Pass [] to clear. To change ONE class without resending the whole array, use borg_patch_taxonomy_class instead. Optional lifecycle tags mark dispatch/completion classes for stuck-dispatch detection. Taxonomy never chooses log recipients.',
                     items: {
                         type: 'object',
                         properties: {
@@ -454,7 +454,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_patch-taxonomy-class',
+        name: 'borg_patch_taxonomy_class',
         description: "Patch ONE classification/lifecycle class in a cube's message_taxonomy without resending the whole taxonomy (avoids clobbering). action=add|replace|remove (replace/remove match name case-insensitively). The full taxonomy is re-validated for non-overlapping prefixes and unique names. Optional lifecycle tags mark dispatch/completion classes for stuck-dispatch detection. Taxonomy never chooses log recipients.",
         inputSchema: {
             type: 'object',
@@ -477,7 +477,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_delete-cube',
+        name: 'borg_delete_cube',
         description: 'Delete a cube and all its roles, drones, and log entries. Irreversible; requires the exact cube UUID again after explicit user confirmation.',
         inputSchema: {
             type: 'object',
@@ -489,7 +489,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_create-role',
+        name: 'borg_create_role',
         description: 'Create a role inside a cube. The detailed_description is the role\'s playbook — only drones assigned to this role see it. Setting is_default=true demotes any existing default; a cube has exactly one default role at a time.',
         inputSchema: {
             type: 'object',
@@ -508,7 +508,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_update-role',
+        name: 'borg_update_role',
         description: 'Update a role. Pass only the fields that change. Promoting to is_default demotes the previous default in the same cube.',
         inputSchema: {
             type: 'object',
@@ -527,8 +527,8 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_patch-role-section',
-        description: "Surgically patch ONE named section of a role's detailed_description, leaving the rest of the field byte-identical. Sections are delimited by plain-label lines (e.g. `Workflow:`, `Project conventions:`) — NOT markdown headings; text before the first label is the preamble. Use this instead of borg_update-role when changing a single section so you don't have to resend (and risk clobbering) the whole playbook. action=replace overwrites a section's body; action=insert adds a new section (optionally after a named one, else appended); action=delete removes a section.",
+        name: 'borg_patch_role_section',
+        description: "Surgically patch ONE named section of a role's detailed_description, leaving the rest of the field byte-identical. Sections are delimited by plain-label lines (e.g. `Workflow:`, `Project conventions:`) — NOT markdown headings; text before the first label is the preamble. Use this instead of borg_update_role when changing a single section so you don't have to resend (and risk clobbering) the whole playbook. action=replace overwrites a section's body; action=insert adds a new section (optionally after a named one, else appended); action=delete removes a section.",
         inputSchema: {
             type: 'object',
             properties: {
@@ -542,8 +542,8 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_delete-role',
-        description: 'Delete a role using the selected local client\'s cube-management grant. Unknown or inaccessible roles refuse. Also refuses for the default, mandatory, or human-seat role, or a role assigned to an active drone. Reassign active drones with borg_reassign-drone or remove them with borg_evict-drone first. Evicted drones that held the deleted role are reassigned to the cube\'s default role; their activity-log attribution is unaffected.',
+        name: 'borg_delete_role',
+        description: 'Delete a role using the selected local client\'s cube-management grant. Unknown or inaccessible roles refuse. Also refuses for the default, mandatory, or human-seat role, or a role assigned to an active drone. Reassign active drones with borg_reassign_drone or remove them with borg_evict_drone first. Evicted drones that held the deleted role are reassigned to the cube\'s default role; their activity-log attribution is unaffected.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -553,7 +553,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_reassign-drone',
+        name: 'borg_reassign_drone',
         description: 'Reassign a drone within the current cube using the selected local client\'s cube-management grant. Returns server-derived drone, cube, and role readback. Coordinator and Queen are workflow labels, not server permissions.',
         inputSchema: {
             type: 'object',
@@ -565,7 +565,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_evict-drone',
+        name: 'borg_evict_drone',
         description: 'Remove a drone using the selected local client\'s cube-management grant. The drone\'s credential is revoked, project files remain, and activity history keeps the removed drone\'s attribution. Accepts drone_id for the current cube or label with cube_id.',
         inputSchema: {
             type: 'object',
@@ -577,7 +577,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_list-drones',
+        name: 'borg_list_drones',
         description: 'List every drone in a cube when this local client has a live read, write, or manage grant. Returns id, label, role_id, agent_kind, last_seen, advisory reported model, working repository home assignment for implementation work, and wake_path_alert_class. Route repository-specific implementation work to the drone homed in that repository; drones do not take implementation work outside their home repository. Repository homing and role labels grant no server permission, and the server does not enforce repository homing.',
         inputSchema: {
             type: 'object',
@@ -588,7 +588,7 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_list-roles',
+        name: 'borg_list_roles',
         description: 'List every role in a cube when this local client has a live read, write, or manage grant. Returns id, name, short_description, is_default, is_mandatory, is_human_seat, can_broadcast, receives_all_direct, and role_class. Role labels affect workflow only and grant no server permission.',
         inputSchema: {
             type: 'object',
@@ -599,24 +599,24 @@ const BASE_TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_list-templates',
-        description: 'List available cube templates that can be applied via borg_apply-template or passed to borg_create-cube.',
+        name: 'borg_list_templates',
+        description: 'List available cube templates that can be applied via borg_apply_template or passed to borg_create_cube.',
         inputSchema: { type: 'object', properties: {} },
     },
     {
-        name: 'borg_apply-template',
-        description: 'A client-orchestrated, non-clobbering application of a named template through role and taxonomy primitives. Requires the selected local client\'s live cube-manage grant. Roles are merged by name: new roles are created; existing template-named roles get missing sections/classes applied, while conflicting text is preserved. Operations are sequential, not atomic: if a later primitive fails, earlier operations may already be committed. Use borg_sync-roles to review and selectively accept conflicts.',
+        name: 'borg_apply_template',
+        description: 'A client-orchestrated, non-clobbering application of a named template through role and taxonomy primitives. Requires the selected local client\'s live cube-manage grant. Roles are merged by name: new roles are created; existing template-named roles get missing sections/classes applied, while conflicting text is preserved. Operations are sequential, not atomic: if a later primitive fails, earlier operations may already be committed. Use borg_sync_roles to review and selectively accept conflicts.',
         inputSchema: {
             type: 'object',
             properties: {
                 cube_id: { type: 'string', description: 'UUID of the cube to apply the template to.' },
-                template_name: { type: 'string', description: 'Template to apply (see borg_list-templates).' },
+                template_name: { type: 'string', description: 'Template to apply (see borg_list_templates).' },
             },
             required: ['cube_id', 'template_name'],
         },
     },
     {
-        name: 'borg_sync-roles',
+        name: 'borg_sync_roles',
         description: 'A client-orchestrated, non-clobbering sync through role and taxonomy primitives. Requires the selected local client\'s live cube-manage grant. Dry-run (default) classifies each fragment as ADD, UNCHANGED, or CONFLICT. On apply, ADDs apply automatically; conflicts apply only through an explicit `decisions` accept, and unspecified conflicts remain unchanged. Operations are sequential, not atomic: if a later primitive fails, earlier operations may already be committed. Custom roles remain untouched.',
         inputSchema: {
             type: 'object',
@@ -639,18 +639,18 @@ const BASE_TOOL_MANIFEST = [
     // a UX/context optimization, NOT an authorization boundary.
     {
         name: 'borg_tool',
-        description: 'Dispatcher: invoke ANY borg tool by name, including tools not pre-loaded in your role-scoped surface. Pass {"name":"<borg_tool>","arguments":{...}}. Routes through the identical auth + validation path as a direct call. Call borg_describe-tool first to learn a deferred tool\'s arguments.',
+        description: 'Dispatcher: invoke ANY borg tool by name, including tools not pre-loaded in your role-scoped surface. Pass {"name":"<borg_tool>","arguments":{...}}. Routes through the identical auth + validation path as a direct call. Call borg_describe_tool first to learn a deferred tool\'s arguments.',
         inputSchema: {
             type: 'object',
             properties: {
-                name: { type: 'string', description: 'The borg tool to invoke, e.g. "borg_evict-drone".' },
+                name: { type: 'string', description: 'The borg tool to invoke, e.g. "borg_evict_drone".' },
                 arguments: { type: 'object', description: 'The arguments object for that tool (same shape as a direct call).' },
             },
             required: ['name'],
         },
     },
     {
-        name: 'borg_describe-tool',
+        name: 'borg_describe_tool',
         description: 'Return the description + input schema for any borg tool by name — including deferred tools not pre-loaded in your surface. Schema-only; never executes the tool. Pair with borg_tool to invoke a deferred tool.',
         inputSchema: {
             type: 'object',
@@ -804,7 +804,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['cube_name', 'drones', 'roles', 'since'],
     },
-    'borg_stream-status': {
+    'borg_stream_status': {
         type: 'object',
         properties: {
             status: {
@@ -827,7 +827,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['status', 'inbox_monitor_healthy'],
     },
-    'borg_read-log': {
+    'borg_read_log': {
         type: 'object',
         properties: {
             // gh#496: no roster block — the per-wake drain payload stays
@@ -839,7 +839,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['entries', 'behind_by', 'has_more'],
     },
-    'borg_read-entry': {
+    'borg_read_entry': {
         type: 'object',
         properties: {
             entry: LOG_ENTRY_OUTPUT,
@@ -848,7 +848,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['entry'],
     },
-    'borg_ack-status': {
+    'borg_ack_status': {
         type: 'object',
         properties: {
             entry_id: { type: 'string' },
@@ -887,22 +887,22 @@ export const TOOL_OUTPUT_SCHEMAS = {
         properties: { decisions: { type: 'array', items: DECISION_OUTPUT } },
         required: ['decisions'],
     },
-    'borg_get-document': {
+    'borg_get_document': {
         type: 'object',
         properties: { document: DOCUMENT_OUTPUT },
         required: ['document'],
     },
-    'borg_list-documents': {
+    'borg_list_documents': {
         type: 'object',
         properties: { documents: { type: 'array', items: DOCUMENT_METADATA_OUTPUT } },
         required: ['documents'],
     },
-    'borg_list-cubes': {
+    'borg_list_cubes': {
         type: 'object',
         properties: { cubes: { type: 'array', items: CUBE_OUTPUT } },
         required: ['cubes'],
     },
-    'borg_list-drones': {
+    'borg_list_drones': {
         type: 'object',
         properties: {
             cube_id: { type: 'string' },
@@ -911,7 +911,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['cube_id', 'drones'],
     },
-    'borg_list-roles': {
+    'borg_list_roles': {
         type: 'object',
         properties: {
             cube_id: { type: 'string' },
@@ -919,7 +919,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['cube_id', 'roles'],
     },
-    'borg_list-templates': {
+    'borg_list_templates': {
         type: 'object',
         properties: {
             templates: {
@@ -933,7 +933,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['templates'],
     },
-    'borg_describe-tool': {
+    'borg_describe_tool': {
         type: 'object',
         properties: {
             name: { type: 'string' },
@@ -962,17 +962,17 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['decision', 'superseded', 'cube_name'],
     },
-    'borg_remove-decision': {
+    'borg_remove_decision': {
         type: 'object',
         properties: { decision: DECISION_OUTPUT, cube_name: { type: 'string' } },
         required: ['decision', 'cube_name'],
     },
-    'borg_put-document': {
+    'borg_put_document': {
         type: 'object',
         properties: { document: DOCUMENT_OUTPUT },
         required: ['document'],
     },
-    'borg_remove-document': {
+    'borg_remove_document': {
         type: 'object',
         properties: { document: DOCUMENT_METADATA_OUTPUT },
         required: ['document'],
@@ -998,7 +998,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['suppressed', 'entry', 'recipients', 'unreachable_recipients', 'advisory'],
     },
-    'borg_create-cube': {
+    'borg_create_cube': {
         type: 'object',
         properties: {
             cube: CUBE_OUTPUT,
@@ -1011,12 +1011,12 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['cube', 'result', 'template'],
     },
-    'borg_update-cube': {
+    'borg_update_cube': {
         type: 'object',
         properties: { cube: CUBE_OUTPUT, advisory: ADVISORY_OUTPUT },
         required: ['cube'],
     },
-    'borg_patch-taxonomy-class': {
+    'borg_patch_taxonomy_class': {
         type: 'object',
         properties: {
             action: { type: 'string', enum: ['add', 'replace', 'remove'] },
@@ -1025,22 +1025,22 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['action', 'class', 'cube'],
     },
-    'borg_delete-cube': {
+    'borg_delete_cube': {
         type: 'object',
         properties: { cube_id: { type: 'string' }, deleted: { type: 'boolean' } },
         required: ['cube_id', 'deleted'],
     },
-    'borg_create-role': {
+    'borg_create_role': {
         type: 'object',
         properties: { role: ROLE_OUTPUT, cube_id: { type: 'string' } },
         required: ['role', 'cube_id'],
     },
-    'borg_update-role': {
+    'borg_update_role': {
         type: 'object',
         properties: { role: ROLE_OUTPUT, advisory: ADVISORY_OUTPUT },
         required: ['role'],
     },
-    'borg_patch-role-section': {
+    'borg_patch_role_section': {
         type: 'object',
         properties: {
             action: { type: 'string', enum: ['replace', 'insert', 'delete'] },
@@ -1050,12 +1050,12 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['action', 'heading', 'role'],
     },
-    'borg_delete-role': {
+    'borg_delete_role': {
         type: 'object',
         properties: { role_id: { type: 'string' }, deleted: { type: 'boolean' } },
         required: ['role_id', 'deleted'],
     },
-    'borg_reassign-drone': {
+    'borg_reassign_drone': {
         type: 'object',
         properties: {
             drone: {
@@ -1073,7 +1073,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['drone', 'role_name', 'cube_name'],
     },
-    'borg_evict-drone': {
+    'borg_evict_drone': {
         type: 'object',
         properties: {
             drone_id: { type: 'string' },
@@ -1083,7 +1083,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['drone_id', 'evicted'],
     },
-    'borg_apply-template': {
+    'borg_apply_template': {
         type: 'object',
         properties: {
             cube_id: { type: 'string' },
@@ -1094,7 +1094,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['cube_id', 'template', 'roles_created', 'roles_updated'],
     },
-    'borg_sync-roles': {
+    'borg_sync_roles': {
         type: 'object',
         properties: {
             cube_id: { type: 'string' },
@@ -1173,7 +1173,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
         },
         required: ['topic', 'matched', 'sections'],
     },
-    'borg_role-rationale': {
+    'borg_role_rationale': {
         type: 'object',
         properties: {
             role: { type: 'string' },

@@ -30,7 +30,7 @@ acknowledgement and saved-connection mechanisms. The Borg server has no special
 The representative needs an existing role that is **not** the human seat and
 not a coordinating (queen-class) role. The default name is
 `hermes-representative`. Create it with the cube's normal role management (for
-example ask the Coordinator to run `borg_create-role`). Keep its text short,
+example ask the Coordinator to run `borg_create_role`). Keep its text short,
 for example: *"Relays the human's requests, questions and decisions to the
 Coordinator and reports the Coordinator's replies back. Does not plan, dispatch
 or review work."* Do not copy the Coordinator role into it.
@@ -124,11 +124,11 @@ Check a connection at any time with
 
 | Tool | Purpose |
 | --- | --- |
-| `borg_representative-status` | Bound cube, representative, Coordinator; live re-check; unresolved sends; limits; `binding_fingerprint`. |
-| `borg_representative-send` | Relay one `request`, `question` or `decision` to the bound Coordinator. |
-| `borg_representative-read` | The bound Coordinator's replies after the delivered checkpoint, oldest first, bounded. Changes nothing. |
-| `borg_representative-deliver` | Move the delivered checkpoint through a reply the host has durably persisted. |
-| `borg_representative-ack` | Signal to the Coordinator that one direct reply was received. Nothing more. |
+| `borg_representative_status` | Bound cube, representative, Coordinator; live re-check; unresolved sends; limits; `binding_fingerprint`. |
+| `borg_representative_send` | Relay one `request`, `question` or `decision` to the bound Coordinator. |
+| `borg_representative_read` | The bound Coordinator's replies after the delivered checkpoint, oldest first, bounded. Changes nothing. |
+| `borg_representative_deliver` | Move the delivered checkpoint through a reply the host has durably persisted. |
+| `borg_representative_ack` | Signal to the Coordinator that one direct reply was received. Nothing more. |
 
 There is no tool for logging to other drones, broadcasting, role or drone
 management, grants, eviction, release, regeneration or server lifecycle, and no
@@ -138,7 +138,7 @@ New network operations re-verify the live cube first: the connection must still 
 bound drone in the bound cube, still under a permitted role, and the bound
 Coordinator must still be an active human-seat drone. Otherwise the call fails
 and nothing is sent. A cached sent retry returns its historical receipt without
-a live re-check; use `borg_representative-status` to check the current connection.
+a live re-check; use `borg_representative_status` to check the current connection.
 
 ## Attribution and authority
 
@@ -616,8 +616,8 @@ delivered from any of them.
   named in `session_key` connects. The CLI, Desktop and worker processes load the
   plugin but start nothing. A platform reconnect does not start a second listener.
 - Each `wake` becomes one injected message with fixed text: `Borg: new
-  Coordinator reply. Call borg_representative-read, persist and relay, then
-  borg_representative-deliver through the last persisted entry_id.` No message
+  Coordinator reply. Call borg_representative_read, persist and relay, then
+  borg_representative_deliver through the last persisted entry_id.` No message
   body, sender or document ever passes through the plugin. A busy conversation
   queues the message; it does not interrupt the running turn.
 - The plugin writes Hermes's answer back to the listener: accepted, or not (for

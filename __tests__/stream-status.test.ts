@@ -1,5 +1,5 @@
 /**
- * Tests for the `borg_stream-status` renderer per drone-4's 18:30:51
+ * Tests for the `borg_stream_status` renderer per drone-4's 18:30:51
  * UX contract. Pure-function tests; no MCP server, no live SSE — just
  * (status, inboxMonitorHealthy, paths) → markdown.
  *
@@ -176,7 +176,7 @@ describe('renderStreamStatus — 5-state top-line per drone-4 contract', () => {
     expect(out).toContain('/work/repo/.borgmcp/inbox-monitor');
     expect(out).toContain('/Users/x/.config/borgmcp/inboxes/cube-uuid/drone-uuid.log');
     expect(out).toContain('## Real-time wake-up');
-    expect(out).toContain('Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.');
+    expect(out).toContain('Re-arm the Monitor first, then drain `borg_read_log unread_only=true`.');
     expect(out).toContain('Invoke `/loop` with no arguments;');
     expect(out).toContain(CLAUDE_MONITOR_LOOP_FALLBACK);
     expect(out).toContain(CLAUDE_MONITOR_DENIED_FALLBACK);
@@ -445,7 +445,7 @@ describe('formatWakePathPrefix (gh#43 — regen self-heal)', () => {
     expect(out).toContain('/tmp/inbox/cube-a/drone-x.log');
     expect(out).toContain('borg inbox for drone-1 on cube borg-mcp');
     expect(out).toContain('this session has no wake path');
-    expect(out).toContain('Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.');
+    expect(out).toContain('Re-arm the Monitor first, then drain `borg_read_log unread_only=true`.');
     expect(out).toContain('Invoke `/loop` with no arguments;');
     expect(out).toContain(CLAUDE_MONITOR_LOOP_FALLBACK);
     expect(out).toContain(CLAUDE_MONITOR_DENIED_FALLBACK);

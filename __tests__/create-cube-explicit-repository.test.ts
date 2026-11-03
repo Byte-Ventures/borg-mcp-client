@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decodeCreateCubeRequest } from 'borgmcp-shared/protocol';
 import { normalizeExplicitRepository } from '../src/remote-client';
 
-// client#499: the borg_create-cube tool binds a cube to an EXPLICIT repository
+// client#499: the borg_create_cube tool binds a cube to an EXPLICIT repository
 // (no cwd inference). The normalizer turns the argument into the wire's
 // { repository, working_repo_name } pair.
 describe('normalizeExplicitRepository', () => {

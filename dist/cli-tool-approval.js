@@ -3,27 +3,30 @@ import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from './guarded-fs.js'
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { borgHomeRoot } from './private-root.js';
+import { assertToolNamePoliciesMigrated, ToolNameMigrationError } from './tool-name-migration.js';
+import { claudeToolPolicyArgs, readClaudeEffectiveSettings } from './claude-effective-settings.js';
 /**
  * Client #20: the narrow coordination surface a borg-launched agent needs
  * without an approval round-trip. Keep the direct-tool list deliberately
  * smaller than the complete Borg MCP surface. borg_tool's transitive scope is
  * disclosed separately before consent.
  */
-export const BORG_COORDINATION_TOOLS = [
-    'regen',
-    'log',
-    'read-log',
-    'roster',
-    'ack',
-    'stream-status',
-    'whoami',
+const COORDINATION_NAMES = [
+    'borg_regen',
+    'borg_log',
+    'borg_read_log',
+    'borg_roster',
+    'borg_ack',
+    'borg_stream_status',
+    'borg_whoami',
     // Required by the canonical lean orientation before acting/after compaction.
-    'cube',
-    'role',
-    'playbook',
-    'tool',
-    'describe-tool',
+    'borg_cube',
+    'borg_role',
+    'borg_playbook',
+    'borg_tool',
+    'borg_describe_tool',
 ];
+export const BORG_COORDINATION_TOOLS = COORDINATION_NAMES.map(name => name.slice(5));
 export const CODEX_BORG_COORDINATION_TOOLS = BORG_COORDINATION_TOOLS.map((name) => `borg:${name}`);
 // OpenCode sanitizes MCP tool names as <server>_<raw tool name>, preserving
 // hyphens. The Borg raw tool prefix is itself `borg_`.
@@ -65,6 +68,10 @@ export function codexApprovalRepairSnippet(tools = CODEX_BORG_COORDINATION_TOOLS
         .join('\n\n');
 }
 export function inspectCodexBorgApprovals(config) {
+    const policy = typeof config === 'string'
+        ? config.match(/["']([^"'\r\n]*)["']/g)?.map(value => value.slice(1, -1))
+        : borgConfigFragment(config);
+    assertToolNamePoliciesMigrated('codex', { tools: policy });
     let defaultMode;
     let toolModes = new Map();
     if (typeof config === 'string') {
@@ -138,6 +145,7 @@ export function mergeOpenCodePermission(permission, tools = OPENCODE_BORG_COORDI
     return { ...preserved, ...openCodeApprovalRepairObject(tools) };
 }
 export function inspectOpenCodeBorgApprovals(config) {
+    assertToolNamePoliciesMigrated('opencode', config);
     const permission = config && typeof config === 'object' && !Array.isArray(config)
         ? config.permission
         : undefined;
@@ -424,6 +432,10 @@ async function readCodexConfigSnapshot(args, cwd, env, runtime) {
 }
 export async function readCodexEffectiveConfig(args, cwd, env, runtime = {}) {
     const snapshot = await readCodexConfigSnapshot(args, cwd, env, runtime);
+    for (const layer of snapshot.layers ?? []) {
+        if (!layer.disabledReason)
+            assertToolNamePoliciesMigrated('codex', { tools: borgConfigFragment(layer.config) });
+    }
     if (!runtime.profile)
         return snapshot.config ?? null;
     const profileConfig = await withNativeCodexProfileLayer(runtime.profile, env, (profileCwd, trustOverride) => readCodexConfigSnapshot([...args.filter((arg) => arg === '--strict-config'), '-c', trustOverride], profileCwd, env, { ...runtime, profile: undefined }));
@@ -450,6 +462,11 @@ export function defaultApprovalIo(confirm, isTTY, options = {}) {
     const loadCodex = options.loadCodex ?? ((args, loadCwd, loadEnv, profile) => readCodexEffectiveConfig(args, loadCwd, loadEnv, { profile }));
     const loadOpenCode = options.loadOpenCode ?? readOpenCodeEffectiveConfig;
     return {
+        readClaudeConfig: () => {
+            const args = options.claudeArgs ?? [];
+            assertToolNamePoliciesMigrated('claude', { permissions: claudeToolPolicyArgs(args) });
+            return readClaudeEffectiveSettings(args, cwd, env);
+        },
         readCodexConfig: (approvalArgs = []) => {
             const args = [...approvalArgs, ...selectedCodexArgs];
             return selectedCodexProfile === undefined
@@ -467,8 +484,19 @@ export function defaultApprovalIo(confirm, isTTY, options = {}) {
     };
 }
 export async function resolveLaunchBorgApprovals(cli, io, options = {}) {
-    if (cli === 'claude')
+    if (cli === 'claude') {
+        try {
+            if (!io.readClaudeConfig)
+                throw new Error('Claude effective settings unavailable');
+            assertToolNamePoliciesMigrated('claude', await io.readClaudeConfig());
+        }
+        catch (error) {
+            if (error instanceof ToolNameMigrationError)
+                throw error;
+            throw new ToolNameMigrationError('claude', 'could not verify effective and managed settings with the installed Claude CLI; update Claude to a version supporting the native get_settings request before using this client.');
+        }
         return { codexArgs: [] };
+    }
     let inspection;
     let openCodeConfig;
     try {
@@ -481,10 +509,9 @@ export async function resolveLaunchBorgApprovals(cli, io, options = {}) {
         }
     }
     catch (error) {
-        return {
-            codexArgs: [],
-            warning: `Could not inspect ${cli} Borg tool approvals: ${error?.message ?? error}. No approval override was applied.`,
-        };
+        if (error instanceof ToolNameMigrationError)
+            throw error;
+        throw new ToolNameMigrationError(cli, 'could not verify effective tool policies with the installed CLI.');
     }
     if (inspection.restrictiveTools.length === 0)
         return { codexArgs: [] };
