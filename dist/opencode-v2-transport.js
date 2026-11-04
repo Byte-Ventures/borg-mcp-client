@@ -14,14 +14,20 @@ export function decodeOpenCodeV2Message(value) {
             ? [{ id: part.id, name: part.name, status: part.state?.status ?? '' }] : []),
     };
 }
-export async function createOpenCodeV2Transport(server) {
+export async function createOpenCodeV2Transport(server, options = {}) {
     // Neither SDK nor schema is loaded on a V1 launch. Never import Service:
     // its ensure/restart lifecycle owns a different, shared OpenCode server.
     const [{ OpenCode }, { SessionMessage }] = await Promise.all([
         import('@opencode/client'), import('@opencode/schema/session-message'),
     ]);
     const client = OpenCode.make({ baseUrl: server.url, headers: server.headers(),
-        fetch: (input, init) => fetch(input, { ...init, redirect: 'error', signal: init?.signal ?? AbortSignal.timeout(10_000) }),
+        fetch: (input, init) => {
+            // Cold location/plugin boot can outlast a normal request. The launcher
+            // supplies one shared deadline, then withdraws it before TUI/kickoff.
+            const signals = [init?.signal, options.startupSignal?.()].filter((signal) => Boolean(signal));
+            return fetch(input, { ...init, redirect: 'error', signal: signals.length
+                    ? AbortSignal.any(signals) : AbortSignal.timeout(10_000) });
+        },
     });
     return {
         client,

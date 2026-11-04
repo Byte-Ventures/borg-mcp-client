@@ -55,11 +55,14 @@ let handoffPending = false;
 let handoffIssued = false;
 let discoveredPaths = [];
 const direct = process.env.OPENCODE_TEST_DIRECT === '1';
+const pluginDelayMs = Number(process.env.OPENCODE_TEST_PLUGIN_DELAY_MS ?? 0);
+assert.ok(Number.isInteger(pluginDelayMs) && pluginDelayMs >= 0 && pluginDelayMs < 60_000, 'Invalid fixture plugin delay');
 const callsPath = join(root, 'mcp-calls.jsonl');
 const environmentPath = join(root, 'mcp-environment.jsonl');
 const valuePath = join(root, 'inline-value.txt'); writeFileSync(valuePath, 'native-file-expanded');
 const plugin = join(root, 'fixture-plugin'); mkdirSync(plugin);
 writeFileSync(join(plugin, 'index.js'), `export default {id:'borg.native-fixture.tools',async setup(ctx){
+  await new Promise(resolve => setTimeout(resolve, ${pluginDelayMs}));
   await ctx.tool.transform(editor => { editor.update('shell', tool => { tool.options = {...tool.options, codemode:true}; }); });
 }};`);
 const userPlugin = join(root, 'user-plugin'); mkdirSync(userPlugin);
@@ -369,6 +372,8 @@ try {
     }
     tui.kill(); await launch.cleanup(); launch = undefined;
   }
+  console.log(JSON.stringify({ version: installation.version, lifecycle: 'passed', pluginDelayMs,
+    configurationMs: nativeRequests.filter(request => request.pathname === '/api/config').map(request => request.milliseconds) }));
 } catch (error) {
   console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12), nativePlugins, providerSteps: providerSteps.slice(-6) }));
   throw error;

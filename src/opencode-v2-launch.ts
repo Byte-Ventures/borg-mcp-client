@@ -135,8 +135,13 @@ export async function launchOpenCodeV2Process(options: {
     let broker: Awaited<ReturnType<typeof startOpenCodeV2Broker>> | undefined;
     let phase = 'private server startup';
     let kickoffAttempted = false;
+    const startup = new AbortController();
+    let startupActive = true;
+    let startupTimer: NodeJS.Timeout | undefined;
     let cleaning: Promise<void> | undefined;
     const cleanup = () => cleaning ??= (async () => {
+      startup.abort();
+      clearTimeout(startupTimer);
       try { await broker?.close(); } finally {
         try { await server?.close(); } finally { fs.rmSync(plugin.directory, { recursive: true, force: true }); }
       }
@@ -144,8 +149,12 @@ export async function launchOpenCodeV2Process(options: {
     try {
       if (!isCanonicalPath(env.OPENCODE_DB!)) throw new OpenCodeV2LaunchError('Borg OpenCode 2 database path contains a symlink. No kickoff was submitted.');
       server = await startOpenCodeV2Server({ installation, directory, env });
+      // Native location discovery and plugin file watchers share a cold-start
+      // budget; no individual request or retry can restart the deadline.
+      startupTimer = setTimeout(() => startup.abort(), 60_000);
+      void server.closed.then(() => startup.abort());
       phase = 'configuration inspection';
-      const transport = await createOpenCodeV2Transport(server);
+      const transport = await createOpenCodeV2Transport(server, { startupSignal: () => startupActive ? startup.signal : undefined });
       const mcpOptions = preserveOpenCodeV2McpOptions(await transport.client.config.get({ location: { directory } }), descriptorPath, options.env.OPENCODE_CONFIG_CONTENT);
       const { Session } = await import('@opencode/schema/session');
       let sessionID = args.sessionID ?? Session.ID.create();
@@ -157,6 +166,7 @@ export async function launchOpenCodeV2Process(options: {
       broker = await startOpenCodeV2Broker({ launch, transport, seat, sessionID, mcpOptions,
         pluginSigningKey: pluginKey.privateKey, prepareSession,
         server: { pid: server.pid!, version: server.version }, orientation: () => renderOrientation(directory, env) });
+      const startupCall = (operation: string, body: Record<string, unknown> = {}) => broker!.call(operation, body, { signal: startup.signal });
       phase = 'session selection';
       if (args.continue) {
         // Native --continue is an explicit user request; never use this list
@@ -180,27 +190,27 @@ export async function launchOpenCodeV2Process(options: {
       // not on metadata/registry reads. Queue an inert, non-resuming probe and
       // cancel it before attaching the TUI or admitting the real kickoff.
       const probeInput = { text: 'Borg runtime readiness probe', key: 'readiness', source: 'readiness', resume: false };
-      let probe = await broker.call('/wake', { ...probeInput, allowSubmit: true });
+      let probe = await startupCall('/wake', { ...probeInput, allowSubmit: true });
       // Plugin activation can outlive prompt admission or its HTTP timeout.
       // Reconcile the same inert intent and wait for the separate hook signal.
       const pluginDeadline = Date.now() + 30_000;
       while (Date.now() < pluginDeadline) {
-        const ready = (await broker.call('/status')).pluginReady;
-        if (!probe.accepted) probe = await broker.call('/wake', { ...probeInput, allowSubmit: false });
+        const ready = (await startupCall('/status')).pluginReady;
+        if (!probe.accepted) probe = await startupCall('/wake', { ...probeInput, allowSubmit: false });
         if (ready && probe.accepted) break;
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       if (!probe.accepted) throw new OpenCodeV2LaunchError('OpenCode 2 runtime readiness could not be confirmed.');
       await transport.client.session.inbox.cancel({ sessionID, inboxID: probe.id });
-      await broker.call('/settle', { source: 'readiness' });
-      const status = await broker.call('/status');
+      await startupCall('/settle', { source: 'readiness' });
+      const status = await startupCall('/status');
       if (!status.pluginReady) throw new OpenCodeV2LaunchError('OpenCode 2 Borg plugin did not become ready. No kickoff was submitted.');
       phase = 'Borg tool registry readiness';
       const mcpDeadline = Date.now() + 15_000;
       while (seat.droneId !== 'unassimilated') {
         const mcp = await transport.client.mcp.list({ location: { directory } });
         const borg = mcp.data.find(item => item.name === 'borg');
-        if (borg?.status.status === 'connected' && (await broker.call('/status')).tools.length) break;
+        if (borg?.status.status === 'connected' && (await startupCall('/status')).tools.length) break;
         if (borg?.status.status === 'failed' || Date.now() >= mcpDeadline) {
           throw new OpenCodeV2LaunchError('OpenCode 2 could not connect its Borg MCP server. No kickoff was submitted.');
         }
@@ -211,6 +221,10 @@ export async function launchOpenCodeV2Process(options: {
       const launchArgs = selectOpenCodeAdapter(installation).buildTuiArgs({ directory,
         port: Number(new URL(server.url).port), sessionId: sessionID, prompt: options.prompt, passthroughArgs: args.rest });
       verifyOpenCodeExecutableStillMatches(installation, env);
+      startup.signal.throwIfAborted();
+      startupActive = false;
+      clearTimeout(startupTimer);
+      startupTimer = undefined;
       phase = 'TUI attachment';
       const child = (options.spawnProcess ?? spawn)(installation.executable, launchArgs,
         { cwd: directory, stdio: 'inherit', shell: false, env: { ...env, ...server.tuiEnv() } });

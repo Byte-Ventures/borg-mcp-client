@@ -20,6 +20,12 @@ TUI environment; the MCP process receives a separate, session-scoped capability.
 The orientation plugin has its own capability for human-session handoffs; the
 MCP wake credential cannot authorize a handoff or change plugin readiness.
 
+After server identity is verified, configuration discovery and plugin readiness
+share a 60-second startup deadline. Cold plugin loading and file watchers can
+take longer than ordinary requests. Startup expiry closes the private server
+before TUI attachment or kickoff. Once ready, Borg restores the ordinary request
+limits; it does not retry an unconfirmed kickoff automatically.
+
 Borg sets `OPENCODE_DB` to a separate persistent V2 database in its private
 state directory. This prevents V2 migrations from changing the database V1
 uses. Provider settings and environment credentials remain available. Saved
@@ -88,6 +94,8 @@ The integration is measured against published native binaries. Its V1 baseline
 is 1.18.15; its V2 client and schema dependencies are pinned to 2.1.2. Compatibility
 checks also exercise the current stable V2 binary with a deterministic local
 provider, without external model calls.
+The native fixture also accepts `OPENCODE_TEST_PLUGIN_DELAY_MS=16000` to exercise
+slow plugin initialization across concurrent hosts, resume and continue.
 
 Upstream contracts: [V2 plugin migration](https://opencode.ai/v2/docs/build/plugins/migrate-v1),
 [permissions](https://opencode.ai/v2/docs/permissions), and
