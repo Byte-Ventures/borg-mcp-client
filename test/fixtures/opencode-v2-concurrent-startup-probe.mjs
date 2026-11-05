@@ -28,7 +28,7 @@ if (process.argv[2] === '--worker') {
     stage = 'server';
     const server = await startOpenCodeV2Server({
       installation: { executable: binary, ...parseOpenCodeVersion(version) }, directory,
-      env: process.env, readyTimeoutMs: 60_000,
+      env: nativeEnv, readyTimeoutMs: 60_000,
     });
     try {
       stage = 'configuration';
@@ -40,7 +40,7 @@ if (process.argv[2] === '--worker') {
     } catch (error) { await server.close(); throw error; }
   };
   process.send({ type: 'waiting' });
-  await once(process, 'message');
+  const [{ env: nativeEnv }] = await once(process, 'message');
   let server;
   try {
     server = await (process.env.OPENCODE_TEST_UNGATED === '1' ? start() : withOpenCodeV2Startup(start));
@@ -87,7 +87,13 @@ if (process.argv[2] === '--worker') {
     await old.close(); old = undefined;
     const ready = [];
     const waiting = directories.map(directory => {
-      const child = fork(self, ['--worker', root, binary, version, directory], { env, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+      // The launcher needs its normal OS environment (notably PowerShell on
+      // Windows). Only the native host receives the credential-free env above.
+      // Borg's state stays isolated by BORG_STATE_ROOT in both processes.
+      const child = fork(self, ['--worker', root, binary, version, directory], {
+        env: { ...process.env, BORG_STATE_ROOT: root, OPENCODE_TEST_UNGATED: env.OPENCODE_TEST_UNGATED },
+        stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      });
       children.push(child);
       let waitingResolve, waitingReject;
       const atBarrier = new Promise((resolve, reject) => { waitingResolve = resolve; waitingReject = reject; });
@@ -108,7 +114,7 @@ if (process.argv[2] === '--worker') {
       return atBarrier;
     });
     await bounded(Promise.all(waiting));
-    children.forEach(child => child.send('start'));
+    children.forEach(child => child.send({ env }));
     const pids = await bounded(Promise.all(ready));
     assert.equal(new Set(pids).size, 3);
     console.log(JSON.stringify({ previous: oldVersion, version, simultaneousUpgrade: 'passed', servers: pids.length,
