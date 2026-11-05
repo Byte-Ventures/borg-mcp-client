@@ -130,7 +130,7 @@ legacy signal as a deletion veto.
 **Invariant:** a state-root Monitor announces entry lines written after the
 previous Monitor for the same inbox stopped and before this one armed. At most
 the newest 20 are replayed at one arm; when more are eligible, one notice line
-says how many were not shown and to drain `borg_read-log unread_only=true`.
+says how many were not shown and to drain `borg_read_log unread_only=true`.
 Delivery is at least once, not exactly once: after a crash or kill between
 emitting a line and storing the cursor, that line is announced again at the
 next arm. Legacy positional invocations keep the previous skip-history arm and

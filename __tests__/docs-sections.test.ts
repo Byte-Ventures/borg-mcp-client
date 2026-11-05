@@ -46,7 +46,7 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     expect(enrollmentGuide).toContain('borg assimilate --host <server> --enroll');
     expect(enrollmentGuide).toContain('grant that enrolled client');
 
-    for (const section of DOCS_SECTIONS.filter(({ slug }) => !['enroll', 'seat-lifecycle', 'documents', 'human-representative', 'opencode'].includes(slug))) {
+    for (const section of DOCS_SECTIONS.filter(({ slug }) => !['enroll', 'seat-lifecycle', 'documents', 'human-representative', 'opencode', 'tool-name-migration'].includes(slug))) {
       expect(new URL(section.url).hostname).toBe('borgmcp.ai');
     }
   });
@@ -69,7 +69,7 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     expect(matchDocsSections('codex').map((s) => s.slug)).toContain('faq');
     expect(matchDocsSections('document citation revision')[0]?.slug).toBe('documents');
     expect(matchDocsSections('explicit audience recipient selector broadcast').map((s) => s.slug)).toContain('concepts');
-    expect(matchDocsSections('borg_read-entry entry_id')[0]?.slug).toBe('tools');
+    expect(matchDocsSections('borg_read_entry entry_id')[0]?.slug).toBe('tools');
     expect(matchDocsSections('zzzznotarealtopic')).toEqual([]);
     expect(matchDocsSections('')).toEqual([]);
   });

@@ -109,10 +109,10 @@ describe('MCP role-text proxy policy (local path)', () => {
   });
 
   it('does not publish a conflicting client-side maxLength for role-text tools', () => {
-    for (const name of ['borg_create-role', 'borg_update-role', 'borg_patch-role-section']) {
+    for (const name of ['borg_create_role', 'borg_update_role', 'borg_patch_role_section']) {
       const tool = TOOL_MANIFEST.find((entry) => entry.name === name)!;
       const properties = tool.inputSchema.properties as Record<string, Record<string, unknown>>;
-      const field = name === 'borg_patch-role-section' ? properties.body : properties.detailed_description;
+      const field = name === 'borg_patch_role_section' ? properties.body : properties.detailed_description;
       expect(field.maxLength).toBeUndefined();
     }
   });

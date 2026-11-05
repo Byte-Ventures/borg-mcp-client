@@ -310,7 +310,7 @@ describe('served MCP process', () => {
     stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
     expect(pinnedSeats).toEqual([REP_ID]);
 
-    const send = { name: 'borg_representative-send', arguments: { kind: 'request', authorization: 'user_authorized', message: 'Do X.' } };
+    const send = { name: 'borg_representative_send', arguments: { kind: 'request', authorization: 'user_authorized', message: 'Do X.' } };
     const before = await rpc(2, 'tools/call', send);
     expect(before.result.isError).toBeUndefined();
     expect(cube.appendCalls.map((call) => call.to)).toEqual([[COORD_ID]]);
@@ -324,9 +324,9 @@ describe('served MCP process', () => {
       const calls = cube.calls.length;
       const refused = [
         { ...send, arguments: { ...send.arguments, message: 'Do Y.' } },
-        { name: 'borg_representative-read', arguments: {} },
-        { name: 'borg_representative-deliver', arguments: { through: reply.id } },
-        { name: 'borg_representative-ack', arguments: { entry_id: reply.id } },
+        { name: 'borg_representative_read', arguments: {} },
+        { name: 'borg_representative_deliver', arguments: { through: reply.id } },
+        { name: 'borg_representative_ack', arguments: { entry_id: reply.id } },
       ];
       for (const [index, call] of refused.entries()) {
         const after = await rpc(3 + index, 'tools/call', call);
@@ -337,7 +337,7 @@ describe('served MCP process', () => {
       expect(cube.acks).toEqual([]);
       expect(cube.calls).toHaveLength(calls); // no network call at all after the rebind
       // Status stays available and names both generations.
-      const status = await rpc(10, 'tools/call', { name: 'borg_representative-status', arguments: {} });
+      const status = await rpc(10, 'tools/call', { name: 'borg_representative_status', arguments: {} });
       expect(status.result.isError).toBeUndefined();
       expect(JSON.parse(status.result.content[0].text)).toMatchObject({
         binding_fingerprint: currentFingerprint, pinned_binding_fingerprint: pinnedFingerprint,
@@ -405,15 +405,15 @@ describe('an unusable or reset state database at the real command seam', () => {
     const session = mcpSession();
     try {
       await session.rpc(1, 'initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'host', version: '0' } });
-      const status = await call(session, 2, 'borg_representative-status');
+      const status = await call(session, 2, 'borg_representative_status');
       expect(status.isError).toBe(false);
       expect(status.body).toMatchObject({ connected: false, state_problem: { code: 'REPRESENTATIVE_STATE_CORRUPT' } });
       const reply = cube.post(COORD_ID, 'reply', [REP_ID]);
       for (const [index, [name, args]] of ([
-        ['borg_representative-send', { kind: 'question', authorization: 'model_advice', message: 'hi' }],
-        ['borg_representative-read', {}],
-        ['borg_representative-deliver', { through: reply.id }],
-        ['borg_representative-ack', { entry_id: reply.id }],
+        ['borg_representative_send', { kind: 'question', authorization: 'model_advice', message: 'hi' }],
+        ['borg_representative_read', {}],
+        ['borg_representative_deliver', { through: reply.id }],
+        ['borg_representative_ack', { entry_id: reply.id }],
       ] as const).entries()) {
         const refused = await call(session, 3 + index, name, args);
         expect(refused.isError).toBe(true);

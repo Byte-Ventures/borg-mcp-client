@@ -1,5 +1,5 @@
 /**
- * Renderer + inbox-Monitor liveness probe for `borg_stream-status`.
+ * Renderer + inbox-Monitor liveness probe for `borg_stream_status`.
  *
  * Split out from `index.ts` so the 5-state precedence logic and the
  * `pgrep`-based liveness check can be unit-tested without spinning up
@@ -138,7 +138,7 @@ export interface RenderInputs {
 }
 
 /**
- * Render the `borg_stream-status` markdown body per drone-4's 18:30:51
+ * Render the `borg_stream_status` markdown body per drone-4's 18:30:51
  * contract. Pure function — no I/O, no clock reads. Caller assembles
  * the inputs.
  */
@@ -317,7 +317,7 @@ export function renderStreamStatus(inputs: RenderInputs): string {
       lines.push('');
       lines.push('## OpenCode wake delivery is degraded');
       lines.push(
-        'One or more durable inbox entries were rejected or could not be confirmed. Run `borg_read-log unread_only=true` and drain the unread log now. Use `borg_stream-status` to check whether failed or delivered-unconfirmed entries remain.'
+        'One or more durable inbox entries were rejected or could not be confirmed. Run `borg_read_log unread_only=true` and drain the unread log now. Use `borg_stream_status` to check whether failed or delivered-unconfirmed entries remain.'
       );
       return lines.join('\n');
     }
@@ -328,7 +328,7 @@ export function renderStreamStatus(inputs: RenderInputs): string {
       lines.push('');
       lines.push('## Codex wake delivery is unavailable');
       lines.push(
-        'The Codex remote-control bridge cannot currently deliver a wake. Run `borg_read-log unread_only=true` and drain the unread log now, then reconnect the Codex wake path.'
+        'The Codex remote-control bridge cannot currently deliver a wake. Run `borg_read_log unread_only=true` and drain the unread log now, then reconnect the Codex wake path.'
       );
       return lines.join('\n');
     }
@@ -386,7 +386,7 @@ export function shouldShowWakePathWarning(
  *
  * Mirrors the State-5 self-arm instruction shape in
  * `renderStreamStatus` so a drone sees the same Monitor command via
- * both `borg_stream-status` and `borg_regen`. The differentiator: regen
+ * both `borg_stream_status` and `borg_regen`. The differentiator: regen
  * runs on every /loop iteration, so the prefix gives passive
  * self-healing (worst-case latency = the /loop fallback heartbeat),
  * whereas stream-status only surfaces the warning when actively
@@ -409,7 +409,7 @@ export function formatWakePathPrefix(inputs: {
         delivery
           ? `${delivery['delivered-unconfirmed']} delivered-unconfirmed and ${delivery.failed} failed entries`
           : 'an unhealthy runtime signal'
-      }. Run \`borg_stream-status\`, then run \`borg_read-log unread_only=true\` and drain the unread log.`,
+      }. Run \`borg_stream_status\`, then run \`borg_read_log unread_only=true\` and drain the unread log.`,
       '',
       '---',
       '',
@@ -419,7 +419,7 @@ export function formatWakePathPrefix(inputs: {
     return [
       '## ⚠ Codex wake path unavailable',
       '',
-      'The remote-control bridge cannot currently deliver a wake. Run `borg_read-log unread_only=true` and drain the unread log, then reconnect the Codex wake path.',
+      'The remote-control bridge cannot currently deliver a wake. Run `borg_read_log unread_only=true` and drain the unread log, then reconnect the Codex wake path.',
       '',
       '---',
       '',

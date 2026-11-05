@@ -3,8 +3,8 @@ export const OPENCODE_WAKE_PATH_GUIDANCE = 'OpenCode wakes through HTTP entry in
     'Borg writes each entry to the durable inbox before one injection attempt and ' +
     'confirms delivery by its unique persisted metadata identity; no inbox Monitor or secondary wake loop is used. ' +
     'If injection is rejected or cannot be ' +
-    'confirmed, the durable entry remains available and `borg_stream-status` reports ' +
-    'it as failed or delivered-unconfirmed; run `borg_read-log unread_only=true` and ' +
+    'confirmed, the durable entry remains available and `borg_stream_status` reports ' +
+    'it as failed or delivered-unconfirmed; run `borg_read_log unread_only=true` and ' +
     'drain the unread log to recover. ' +
     CUBE_ACTIVITY_RESUME_WAKE_MESSAGE;
 //# sourceMappingURL=opencode-wake-copy.js.map

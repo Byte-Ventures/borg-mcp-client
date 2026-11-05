@@ -44,8 +44,8 @@ describe('codex launch helpers', () => {
     expect(opencodePrompt).toContain('OpenCode wakes');
     expect(opencodePrompt).toContain('durable inbox');
     expect(opencodePrompt).toContain('delivered-unconfirmed');
-    expect(opencodePrompt).toContain('borg_read-log unread_only=true');
-    expect(opencodePrompt).not.toContain('check activity by calling borg_read-log periodically');
+    expect(opencodePrompt).toContain('borg_read_log unread_only=true');
+    expect(opencodePrompt).not.toContain('check activity by calling borg_read_log periodically');
 
     // STRIPPED (gh#929): the playbook-duplicated read-log-triage paragraph
     // (loopFreshnessClause — the playbook owns it post-gh#914)…
@@ -74,9 +74,9 @@ describe('codex launch helpers', () => {
     expect(clause).toContain('--state-root');
     expect(clause).toContain(stateRoot);
     expect(clause).toContain(inboxPath);
-    expect(clause).toContain('borg_read-log unread_only=true');
+    expect(clause).toContain('borg_read_log unread_only=true');
     expect(clause).toContain(
-      'on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
+      'on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read_log unread_only=true`.',
     );
     expect(clause).toContain(wakePathArming('claude', inboxPath, stateRoot));
     expect(clause).toContain('Invoke `/loop` with no arguments;');

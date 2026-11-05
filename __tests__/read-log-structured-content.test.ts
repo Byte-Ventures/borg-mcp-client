@@ -7,8 +7,8 @@ import { TOOL_MANIFEST } from '../src/tool-manifest';
 // stay proportional to the entries it returns — no fixed roster block. The
 // pre-fix payload shipped the full drones+roles arrays (~54KB even for an
 // empty drain).
-describe('borg_read-log structured payload proportionality', () => {
-  const readLogSchema = TOOL_MANIFEST.find((entry) => entry.name === 'borg_read-log')!.outputSchema!;
+describe('borg_read_log structured payload proportionality', () => {
+  const readLogSchema = TOOL_MANIFEST.find((entry) => entry.name === 'borg_read_log')!.outputSchema!;
   const validator = new AjvJsonSchemaValidator();
   const validate = validator.getValidator(readLogSchema as never);
 
@@ -68,7 +68,7 @@ describe('borg_read-log structured payload proportionality', () => {
     expect(readLogSchema.required).not.toContain('omitted');
   });
 
-  it('declares no roster block in the borg_read-log outputSchema', () => {
+  it('declares no roster block in the borg_read_log outputSchema', () => {
     expect(readLogSchema.properties).not.toHaveProperty('drones');
     expect(readLogSchema.properties).not.toHaveProperty('roles');
     expect(readLogSchema.required).toEqual(expect.arrayContaining(['entries', 'behind_by', 'has_more']));

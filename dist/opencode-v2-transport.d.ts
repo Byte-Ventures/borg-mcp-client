@@ -18,5 +18,7 @@ export interface OpenCodeV2Transport {
     nextMessageID(): string;
     message(sessionID: string, messageID: string): Promise<BorgOpenCodeMessage | null>;
 }
-export declare function createOpenCodeV2Transport(server: OpenCodeV2Server): Promise<OpenCodeV2Transport>;
+export declare function createOpenCodeV2Transport(server: OpenCodeV2Server, options?: {
+    startupSignal?: () => AbortSignal | undefined;
+}): Promise<OpenCodeV2Transport>;
 //# sourceMappingURL=opencode-v2-transport.d.ts.map

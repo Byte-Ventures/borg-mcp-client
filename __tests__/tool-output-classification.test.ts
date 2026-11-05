@@ -13,44 +13,44 @@ const TYPED_TOOLS = [
   'borg_version',
   'borg_whoami',
   'borg_roster',
-  'borg_stream-status',
-  'borg_read-log',
-  'borg_read-entry',
-  'borg_ack-status',
+  'borg_stream_status',
+  'borg_read_log',
+  'borg_read_entry',
+  'borg_ack_status',
   'borg_decisions',
-  'borg_get-document',
-  'borg_list-documents',
-  'borg_list-cubes',
-  'borg_list-drones',
-  'borg_list-roles',
-  'borg_list-templates',
-  'borg_describe-tool',
+  'borg_get_document',
+  'borg_list_documents',
+  'borg_list_cubes',
+  'borg_list_drones',
+  'borg_list_roles',
+  'borg_list_templates',
+  'borg_describe_tool',
   // Mutation receipts
   'borg_ack',
   'borg_decide',
-  'borg_remove-decision',
-  'borg_put-document',
-  'borg_remove-document',
+  'borg_remove_decision',
+  'borg_put_document',
+  'borg_remove_document',
   'borg_log',
-  'borg_create-cube',
-  'borg_update-cube',
-  'borg_patch-taxonomy-class',
-  'borg_delete-cube',
-  'borg_create-role',
-  'borg_update-role',
-  'borg_patch-role-section',
-  'borg_delete-role',
-  'borg_reassign-drone',
-  'borg_evict-drone',
-  'borg_apply-template',
-  'borg_sync-roles',
+  'borg_create_cube',
+  'borg_update_cube',
+  'borg_patch_taxonomy_class',
+  'borg_delete_cube',
+  'borg_create_role',
+  'borg_update_role',
+  'borg_patch_role_section',
+  'borg_delete_role',
+  'borg_reassign_drone',
+  'borg_evict_drone',
+  'borg_apply_template',
+  'borg_sync_roles',
   // Context/domain results
   'borg_regen',
   'borg_assimilate',
   'borg_cube',
   'borg_role',
   'borg_docs',
-  'borg_role-rationale',
+  'borg_role_rationale',
 ];
 
 /** Output varies by the selected inner tool; the inner result passes through. */
@@ -133,11 +133,11 @@ describe('tool output classification — complete registry', () => {
     const advisorySentence = 'The cube Directive is 9000 bytes — consider trimming it toward the 8192-byte guideline.';
 
     const conforming: Array<[string, Record<string, unknown>]> = [
-      ['borg_update-cube', { cube, advisory: advisorySentence }],
-      ['borg_update-cube', { cube, advisory: null }],
-      ['borg_update-role', { role, advisory: advisorySentence }],
-      ['borg_update-role', { role, advisory: null }],
-      ['borg_patch-role-section', { action: 'replace', heading: 'Workflow', role, advisory: advisorySentence }],
+      ['borg_update_cube', { cube, advisory: advisorySentence }],
+      ['borg_update_cube', { cube, advisory: null }],
+      ['borg_update_role', { role, advisory: advisorySentence }],
+      ['borg_update_role', { role, advisory: null }],
+      ['borg_patch_role_section', { action: 'replace', heading: 'Workflow', role, advisory: advisorySentence }],
     ];
     for (const [name, result] of conforming) {
       const validate = validator.getValidator(byName.get(name)!.outputSchema as never);
@@ -147,11 +147,11 @@ describe('tool output classification — complete registry', () => {
 
     // Control: the object-shaped advisory (the log-append shape) must NOT
     // conform on these endpoints — that was the original schema defect.
-    for (const name of ['borg_update-cube', 'borg_update-role', 'borg_patch-role-section']) {
+    for (const name of ['borg_update_cube', 'borg_update_role', 'borg_patch_role_section']) {
       const validate = validator.getValidator(byName.get(name)!.outputSchema as never);
-      const base = name === 'borg_update-cube'
+      const base = name === 'borg_update_cube'
         ? { cube }
-        : name === 'borg_update-role'
+        : name === 'borg_update_role'
           ? { role }
           : { action: 'replace', heading: 'Workflow', role };
       const verdict = validate({ ...base, advisory: { code: 'STORE_AS_DOCUMENT', threshold_bytes: 1024 } });
@@ -178,14 +178,14 @@ describe('tool output classification — complete registry', () => {
 
   it('keeps the high-risk orchestration contracts explicit', () => {
     const byName = new Map(TOOL_MANIFEST.map((entry) => [entry.name, entry]));
-    expect(byName.get('borg_ack-status')?.outputSchema?.required).toEqual(
+    expect(byName.get('borg_ack_status')?.outputSchema?.required).toEqual(
       expect.arrayContaining(['entry_id', 'visibility', 'recipients', 'claims']),
     );
-    expect(byName.get('borg_read-log')?.outputSchema?.required).toEqual(
+    expect(byName.get('borg_read_log')?.outputSchema?.required).toEqual(
       expect.arrayContaining(['entries', 'behind_by', 'has_more']),
     );
-    expect(byName.get('borg_read-log')?.outputSchema?.properties).toHaveProperty('omitted');
-    expect(byName.get('borg_read-log')?.outputSchema?.required).not.toContain('omitted');
+    expect(byName.get('borg_read_log')?.outputSchema?.properties).toHaveProperty('omitted');
+    expect(byName.get('borg_read_log')?.outputSchema?.required).not.toContain('omitted');
     expect(byName.get('borg_log')?.outputSchema?.required).toEqual(
       expect.arrayContaining(['suppressed', 'entry', 'recipients', 'unreachable_recipients', 'advisory']),
     );

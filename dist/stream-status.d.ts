@@ -1,5 +1,5 @@
 /**
- * Renderer + inbox-Monitor liveness probe for `borg_stream-status`.
+ * Renderer + inbox-Monitor liveness probe for `borg_stream_status`.
  *
  * Split out from `index.ts` so the 5-state precedence logic and the
  * `pgrep`-based liveness check can be unit-tested without spinning up
@@ -73,7 +73,7 @@ export interface RenderInputs {
     humanAgo: (d: Date) => string;
 }
 /**
- * Render the `borg_stream-status` markdown body per drone-4's 18:30:51
+ * Render the `borg_stream_status` markdown body per drone-4's 18:30:51
  * contract. Pure function — no I/O, no clock reads. Caller assembles
  * the inputs.
  */
@@ -103,7 +103,7 @@ export declare function shouldShowWakePathWarning(streamStatus: StreamStatus, in
  *
  * Mirrors the State-5 self-arm instruction shape in
  * `renderStreamStatus` so a drone sees the same Monitor command via
- * both `borg_stream-status` and `borg_regen`. The differentiator: regen
+ * both `borg_stream_status` and `borg_regen`. The differentiator: regen
  * runs on every /loop iteration, so the prefix gives passive
  * self-healing (worst-case latency = the /loop fallback heartbeat),
  * whereas stream-status only surfaces the warning when actively

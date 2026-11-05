@@ -62,7 +62,7 @@ describe('renderRoleList (Sprint 6 / gh#153)', () => {
     expect(out).toMatch(/\*\*Plain\*\* `r5` — plain role/);
   });
 
-  it('multi-role list contains all role IDs + the borg_reassign-drone hint', () => {
+  it('multi-role list contains all role IDs + the borg_reassign_drone hint', () => {
     const out = renderRoleList([
       { id: 'r1', name: 'Coordinator', role_class: 'queen', is_human_seat: true, is_default: false },
       { id: 'r2', name: 'Builder', is_default: true, is_human_seat: false },
@@ -72,6 +72,6 @@ describe('renderRoleList (Sprint 6 / gh#153)', () => {
     expect(out).toContain('`r2`');
     expect(out).toContain('`r3`');
     expect(out).toContain('Roles in cube cube-multi (3):');
-    expect(out).toContain('borg_reassign-drone');
+    expect(out).toContain('borg_reassign_drone');
   });
 });

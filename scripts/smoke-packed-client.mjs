@@ -375,16 +375,16 @@ export async function smokePackedClient(packageRoot, options = {}) {
                 settle(new Error(`Packed MCP tool discovery failed: ${line}`));
                 return;
               }
-              const ackStatus = message.result.tools.find((tool) => tool.name === 'borg_ack-status');
+              const ackStatus = message.result.tools.find((tool) => tool.name === 'borg_ack_status');
               if (
                 ackStatus?.inputSchema?.properties?.entry_id?.format !== 'uuid' ||
                 ackStatus.inputSchema?.required?.length !== 1 ||
                 ackStatus.inputSchema.required[0] !== 'entry_id'
               ) {
-                settle(new Error('Packed MCP tool discovery omitted the strict borg_ack-status schema.'));
+                settle(new Error('Packed MCP tool discovery omitted the strict borg_ack_status schema.'));
                 return;
               }
-              const readEntry = message.result.tools.find((tool) => tool.name === 'borg_read-entry');
+              const readEntry = message.result.tools.find((tool) => tool.name === 'borg_read_entry');
               const log = message.result.tools.find((tool) => tool.name === 'borg_log');
               const logAudience = log?.inputSchema?.properties?.to;
               if (
@@ -400,7 +400,7 @@ export async function smokePackedClient(packageRoot, options = {}) {
                 logAudience.anyOf !== undefined ||
                 logAudience.allOf !== undefined
               ) {
-                settle(new Error('Packed MCP tool discovery omitted mandatory explicit log addressing or borg_read-entry.'));
+                settle(new Error('Packed MCP tool discovery omitted mandatory explicit log addressing or borg_read_entry.'));
                 return;
               }
               // gh#492: the packed artifact must expose the typed output
@@ -408,7 +408,7 @@ export async function smokePackedClient(packageRoot, options = {}) {
               // dispatcher or the text-only playbook chapter.
               const playbook = message.result.tools.find((tool) => tool.name === 'borg_playbook');
               const dispatcher = message.result.tools.find((tool) => tool.name === 'borg_tool');
-              const readLog = message.result.tools.find((tool) => tool.name === 'borg_read-log');
+              const readLog = message.result.tools.find((tool) => tool.name === 'borg_read_log');
               const logOutputRequired = log?.outputSchema?.required ?? [];
               if (
                 playbook?.outputSchema !== undefined ||
@@ -447,17 +447,17 @@ export async function smokePackedClient(packageRoot, options = {}) {
                 settle(new Error(`Packed borg_tool dispatcher dropped the inner structuredContent: ${line.slice(0, 300)}`));
                 return;
               }
-              child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'borg_describe-tool', arguments: { name: 'borg_read-log' } } })}\n`);
+              child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'borg_describe_tool', arguments: { name: 'borg_read_log' } } })}\n`);
             } else if (message.id === 5) {
               const structured = message.result?.structuredContent;
               const requiredFields = structured?.outputSchema?.required ?? [];
               if (
                 message.error ||
                 message.result?.isError === true ||
-                structured?.name !== 'borg_read-log' ||
+                structured?.name !== 'borg_read_log' ||
                 !['entries', 'behind_by', 'has_more'].every((field) => requiredFields.includes(field))
               ) {
-                settle(new Error(`Packed borg_describe-tool omitted the described outputSchema: ${line.slice(0, 300)}`));
+                settle(new Error(`Packed borg_describe_tool omitted the described outputSchema: ${line.slice(0, 300)}`));
                 return;
               }
               settle(null, {

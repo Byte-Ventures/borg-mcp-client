@@ -54,7 +54,7 @@ describe('runtime wake-path health', () => {
 
     expect(source).not.toMatch(/SDK-driven|context-streaming/i);
     expect(source).not.toMatch(/no remote-wake mechanisms/i);
-    expect(source).not.toMatch(/check activity by calling borg_read-log periodically/i);
+    expect(source).not.toMatch(/check activity by calling borg_read_log periodically/i);
     expect(source).not.toMatch(/via\s+the SDK/i);
     expect(source).not.toMatch(/OpenCode (?:wakes|session|app-server).*app-server/i);
     expect(source).not.toContain('OpenCode app-server');
@@ -62,7 +62,7 @@ describe('runtime wake-path health', () => {
     expect(source).toContain("OpenCode's local HTTP API");
   });
 
-  it('reports a forced OpenCode delivery failure through borg_stream-status', async () => {
+  it('reports a forced OpenCode delivery failure through borg_stream_status', async () => {
     const failed = openCodeState({
       deliveryStates: {
         queued: 0,
@@ -102,7 +102,7 @@ describe('runtime wake-path health', () => {
     expect(out).toContain(
       'delivered-unconfirmed counts entries that may have been submitted but are not visible in session history; failed counts entries that could not be submitted or were rejected, until the durable source entry is observed consumed',
     );
-    expect(out).toContain('`borg_read-log unread_only=true`');
+    expect(out).toContain('`borg_read_log unread_only=true`');
     expect(out).not.toContain('Monitor command');
   });
 

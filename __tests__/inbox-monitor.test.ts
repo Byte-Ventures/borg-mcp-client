@@ -1447,7 +1447,7 @@ describe('arm replay cursor — close the stop→re-arm gap (6.0.2)', () => {
     expect(plan.replay).toEqual(lines.slice(3));
     expect(plan.history.has(lines[0])).toBe(true);
     expect(formatReplayOmittedLine(3)).toBe(
-      'borg-inbox-monitor: 3 older entries arrived while no monitor was armed and are not shown; drain `borg_read-log unread_only=true`.',
+      'borg-inbox-monitor: 3 older entries arrived while no monitor was armed and are not shown; drain `borg_read_log unread_only=true`.',
     );
   });
 

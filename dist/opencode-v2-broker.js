@@ -414,7 +414,7 @@ export async function startOpenCodeV2Broker(options) {
             fs.renameSync(temp, pluginDescriptorPath);
             persist();
         },
-        call: (operation, body = {}) => callOpenCodeV2Broker(['/human', '/ready', '/unready', '/catalog', '/mcp-options', '/audit-begin', '/audit'].includes(operation) ? pluginDescriptor : descriptor, operation, body),
+        call: (operation, body = {}, request = {}) => callOpenCodeV2Broker(['/human', '/ready', '/unready', '/catalog', '/mcp-options', '/audit-begin', '/audit'].includes(operation) ? pluginDescriptor : descriptor, operation, body, request),
         async close() {
             revoked = true;
             clearInterval(timer);
@@ -427,10 +427,10 @@ export async function startOpenCodeV2Broker(options) {
         },
     };
 }
-export async function callOpenCodeV2Broker(descriptor, operation, body = {}) {
+export async function callOpenCodeV2Broker(descriptor, operation, body = {}, request = {}) {
     const response = await fetch(`${descriptor.url}${operation}`, { method: 'POST', redirect: 'error',
         headers: { Authorization: `Bearer ${descriptor.capability}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, launch: descriptor.launch }), signal: AbortSignal.timeout(15_000) });
+        body: JSON.stringify({ ...body, launch: descriptor.launch }), signal: request.signal ?? AbortSignal.timeout(15_000) });
     if (!response.ok)
         throw new Error('OpenCode 2 launch broker refused the operation. Relaunch through borg.');
     return response.json();

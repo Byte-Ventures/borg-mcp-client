@@ -396,7 +396,7 @@ export class ArmReplayProgress {
 }
 export function formatReplayOmittedLine(omitted) {
     return (`borg-inbox-monitor: ${omitted} older ${omitted === 1 ? 'entry' : 'entries'} arrived while no monitor was armed ` +
-        'and are not shown; drain `borg_read-log unread_only=true`.');
+        'and are not shown; drain `borg_read_log unread_only=true`.');
 }
 /**
  * gh#822: PURE stall evaluator. Given the current inbox size + the holder's

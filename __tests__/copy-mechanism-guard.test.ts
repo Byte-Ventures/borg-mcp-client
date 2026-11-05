@@ -6,7 +6,7 @@
  * tells the user to pass must actually be EXPOSED by that tool's inputSchema.
  *
  * The #479 miss is the motivating class: the regen tip recommended
- * "Use `borg_update-cube` with a taxonomy array" while the client tool's
+ * "Use `borg_update_cube` with a taxonomy array" while the client tool's
  * inputSchema did NOT expose `message_taxonomy` (the worker supported it, the
  * client tool didn't — see #487). PM, UX, and CR all signed off without checking
  * the tool's real inputSchema. This guard makes that check structural so nobody
@@ -20,7 +20,7 @@
  *   Each copy site that tells the user to pass a param carries an INLINE,
  *   machine-readable marker next to the copy:
  *
- *       // copy-param-claim: borg_update-cube.message_taxonomy
+ *       // copy-param-claim: borg_update_cube.message_taxonomy
  *
  *   The guard ENUMERATES every marker across the copy surfaces and asserts the
  *   named param is a real inputSchema property of the named tool. This is the
@@ -132,7 +132,7 @@ describe('gh#490 — copy↔mechanism guard', () => {
 
   it('the tool registry parsed (sanity — registry is non-empty + has known tools)', () => {
     expect(registered.size).toBeGreaterThan(20);
-    expect(registered.has('borg_update-cube')).toBe(true);
+    expect(registered.has('borg_update_cube')).toBe(true);
     expect(registered.has('borg_regen')).toBe(true);
   });
 
@@ -159,12 +159,12 @@ describe('gh#490 — copy↔mechanism guard', () => {
       const taxonomyMarker = markers.find(
         (m) =>
           m.surface === 'src/regen-format.ts' &&
-          m.tool === 'borg_update-cube' &&
+          m.tool === 'borg_update_cube' &&
           m.param === 'message_taxonomy',
       );
       expect(
         taxonomyMarker,
-        'Expected a `copy-param-claim: borg_update-cube.message_taxonomy` marker at the ' +
+        'Expected a `copy-param-claim: borg_update_cube.message_taxonomy` marker at the ' +
           'nullTaxonomyTip copy site in src/regen-format.ts (the #479 miss class).',
       ).toBeDefined();
     });
@@ -198,25 +198,25 @@ describe('gh#490 — copy↔mechanism guard', () => {
   it('the marker extractor is not a no-op (parses tool + param + line from a synthetic source)', () => {
     const synthetic = [
       'export function tip() {',
-      '  // copy-param-claim: borg_update-cube.message_taxonomy',
-      "  return 'Use borg_update-cube ...';",
+      '  // copy-param-claim: borg_update_cube.message_taxonomy',
+      "  return 'Use borg_update_cube ...';",
       '}',
       '// not a marker: borg_regen has no param here',
     ].join('\n');
     const markers = extractCopyParamMarkers('synthetic.ts', synthetic);
     expect(markers).toEqual([
-      { surface: 'synthetic.ts', tool: 'borg_update-cube', param: 'message_taxonomy', line: 2 },
+      { surface: 'synthetic.ts', tool: 'borg_update_cube', param: 'message_taxonomy', line: 2 },
     ]);
   });
 
   it('the param detector is not a no-op (real prop matches, bogus prop does not)', () => {
-    expect(toolExposesParam(indexSrc, 'borg_update-cube', 'message_taxonomy')).toBe(true);
-    expect(toolExposesParam(indexSrc, 'borg_update-cube', 'cube_id')).toBe(true);
-    expect(toolExposesParam(indexSrc, 'borg_update-cube', 'definitely_not_a_real_param')).toBe(false);
+    expect(toolExposesParam(indexSrc, 'borg_update_cube', 'message_taxonomy')).toBe(true);
+    expect(toolExposesParam(indexSrc, 'borg_update_cube', 'cube_id')).toBe(true);
+    expect(toolExposesParam(indexSrc, 'borg_update_cube', 'definitely_not_a_real_param')).toBe(false);
   });
 
   it('taxonomy-editing tools expose lifecycle so full replacements do not drop stuck-ping tags', () => {
-    expect(toolExposesParam(indexSrc, 'borg_update-cube', 'lifecycle')).toBe(true);
-    expect(toolExposesParam(indexSrc, 'borg_patch-taxonomy-class', 'lifecycle')).toBe(true);
+    expect(toolExposesParam(indexSrc, 'borg_update_cube', 'lifecycle')).toBe(true);
+    expect(toolExposesParam(indexSrc, 'borg_patch_taxonomy_class', 'lifecycle')).toBe(true);
   });
 });

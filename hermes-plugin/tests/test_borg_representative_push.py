@@ -210,8 +210,8 @@ class SettingsTests(unittest.TestCase):
 
     def test_wake_text_is_fixed_and_body_free(self):
         self.assertNotRegex(push.WAKE_TEXT, r"[0-9a-f]{8}-[0-9a-f]{4}")
-        self.assertIn("borg_representative-read", push.WAKE_TEXT)
-        self.assertIn("borg_representative-deliver", push.WAKE_TEXT)
+        self.assertIn("borg_representative_read", push.WAKE_TEXT)
+        self.assertIn("borg_representative_deliver", push.WAKE_TEXT)
 
 
 class ProtocolTests(Case):

@@ -348,7 +348,7 @@ function boundedMessage(error: unknown): string {
 }
 
 const SAME_ID_RETRY =
-  'Nothing was re-sent automatically. Retry ONLY by calling borg_representative-send again with the same request_id and ' +
+  'Nothing was re-sent automatically. Retry ONLY by calling borg_representative_send again with the same request_id and ' +
   'identical content: the server deduplicates on that id (protocol post_id), so that retry cannot create a second ' +
   'message. Never re-send this content under a different request_id while it is unresolved.';
 
@@ -805,13 +805,13 @@ export async function deliverRepresentativeReplies(
   const input = (raw ?? {}) as Record<string, unknown>;
   const unknown = Object.keys(input).filter((key) => key !== 'through');
   if (unknown.length > 0 || !isRepresentativeUuid(input.through)) {
-    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'through must be the full UUID of a reply returned by borg_representative-read.');
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'through must be the full UUID of a reply returned by borg_representative_read.');
   }
   const through = input.through;
   await verifyLiveBinding(ctx);
   await ensureRepresentativeState(ctx);
   const outside = () => new RepresentativeError('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY',
-    'That entry is not in the current read window: deliver only a reply that borg_representative-read returned. Nothing changed.');
+    'That entry is not in the current read window: deliver only a reply that borg_representative_read returned. Nothing changed.');
   let entry: LogEntry;
   try {
     ({ entry } = await ctx.backend.readEntry(through));
@@ -849,7 +849,7 @@ export async function ackRepresentativeReply(
   const input = (raw ?? {}) as Record<string, unknown>;
   const unknown = Object.keys(input).filter((key) => key !== 'entry_id');
   if (unknown.length > 0 || typeof input.entry_id !== 'string' || !isRepresentativeUuid(input.entry_id)) {
-    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'entry_id must be the full UUID of a reply returned by borg_representative-read.');
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'entry_id must be the full UUID of a reply returned by borg_representative_read.');
   }
   await verifyLiveBinding(ctx);
   // Ack changes no local state, but it is an effect: a damaged, unsafe or

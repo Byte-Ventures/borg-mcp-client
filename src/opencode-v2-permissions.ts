@@ -1,6 +1,7 @@
 import type { OpenCodeClient } from '@opencode/client';
 import { BORG_COORDINATION_TOOLS, BORG_DISPATCHER_APPROVAL_DISCLOSURE } from './cli-tool-approval.js';
 import { isCanonicalPath } from './private-root.js';
+import { assertToolNamePoliciesMigrated, toolPolicySpellings } from './tool-name-migration.js';
 
 export interface OpenCodeV2Permission { action: string; resource: string; effect: 'allow' | 'deny' | 'ask' }
 export const OPENCODE_V2_COORDINATION_TOOLS = BORG_COORDINATION_TOOLS.map(name => `borg_borg_${name}`.replace(/[^a-zA-Z0-9_-]/g, '_'));
@@ -41,6 +42,7 @@ export async function applyOpenCodeV2LaunchPermissions(client: OpenCodeClient, s
   const agentID = session.agent ?? documents.reduce((id, document) => document.default_agent ?? id, 'build');
   const agent = await client.agent.get({ agentID, location: { directory } });
   const rules = [...agent.data.permissions, ...(session.permissions ?? [])];
+  assertToolNamePoliciesMigrated('opencode', { entries, permissions: rules });
   const restrictive = OPENCODE_V2_COORDINATION_TOOLS.filter(tool => effectiveOpenCodeV2Permission(rules, tool) !== 'allow');
   const warnings: string[] = [];
   const access: OpenCodeV2Permission[] = [];
@@ -61,7 +63,7 @@ export async function applyOpenCodeV2LaunchPermissions(client: OpenCodeClient, s
   }
   if (effectiveOpenCodeV2Permission(rules, 'execute') === 'deny') warnings.push('OpenCode denies execute. Borg will not override this; enable Code Mode yourself or explicitly configure mcp.servers.borg.codemode=false to expose Borg tools directly.');
   if (restrictive.length) {
-    const additions = restrictive.map(action => ({ action, resource: '*', effect: 'allow' as const }));
+    const additions = restrictive.flatMap(tool => toolPolicySpellings('opencode', tool)).map(action => ({ action, resource: '*', effect: 'allow' as const }));
     warnings.push(skipOverride
       ? `OpenCode restricts ${restrictive.length} Borg coordination tools. To allow them, append: ${JSON.stringify({ permissions: additions })}`
       : `Applied launch-only approvals for ${restrictive.length} Borg coordination tools. ${BORG_DISPATCHER_APPROVAL_DISCLOSURE}`);
@@ -87,7 +89,7 @@ export async function applyOpenCodeV2LaunchPermissions(client: OpenCodeClient, s
   }
   if (access.length || (restrictive.length && !skipOverride)) await client.session.update({ sessionID, permissions: [
     ...permissions,
-    ...(!skipOverride ? restrictive.map(action => ({ action, resource: '*', effect: 'allow' as const })) : []),
+    ...(!skipOverride ? restrictive.flatMap(tool => toolPolicySpellings('opencode', tool)).map(action => ({ action, resource: '*', effect: 'allow' as const })) : []),
   ] });
   return warnings;
 }

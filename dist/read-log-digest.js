@@ -36,7 +36,7 @@ export function buildReadLogDigest(input) {
         increment(classCounts, messageClass(entry.message, input.taxonomy));
     }
     const lines = [
-        `Reattach digest — ${input.entries.length} unread entries from ${oldest} to ${newest}; ${omitted} older entries are summarized, not shown. Older directed entries may be superseded: confirm with the sender or borg_read-entry before acting.`,
+        `Reattach digest — ${input.entries.length} unread entries from ${oldest} to ${newest}; ${omitted} older entries are summarized, not shown. Older directed entries may be superseded: confirm with the sender or borg_read_entry before acting.`,
     ];
     if (input.capped > 0) {
         lines.push(`${input.capped} additional unread ${input.capped === 1 ? 'entry was' : 'entries were'} not covered because the ${DIGEST_FETCH_CAP}-entry fetch cap was reached.`);

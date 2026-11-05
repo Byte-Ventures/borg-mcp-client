@@ -10,6 +10,7 @@
  *    collaborating sessions.
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { canonicalToolName } from './tool-names.js';
 import { OPENCODE_V2_DESCRIPTOR_ENV } from './opencode-v2-broker.js';
 import { connectOpenCodeV2Runtime, injectOpenCodeV2Entry, settleOpenCodeV2Entry, notifyOpenCodeV2LogPersisted } from './opencode-v2-runtime.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -280,6 +281,7 @@ export async function main() {
     // Register tool execution handler
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let { name, arguments: args } = request.params;
+        name = canonicalToolName(name);
         const identityFailure = await waitForOpenCodeIdentity();
         if (identityFailure) {
             return {
@@ -290,11 +292,11 @@ export async function main() {
                 isError: true,
             };
         }
-        // gh#899: borg_describe-tool — schema-only, NEVER executes. Returns the
+        // gh#899: borg_describe_tool — schema-only, NEVER executes. Returns the
         // named tool's def from allToolDefs so a role-scoped session can learn a
         // deferred tool's arguments before invoking it via borg_tool.
-        if (name === 'borg_describe-tool') {
-            const target = typeof args?.name === 'string' ? args.name : '';
+        if (name === 'borg_describe_tool') {
+            const target = canonicalToolName(typeof args?.name === 'string' ? args.name : '');
             const def = allToolDefs.find((t) => t.name === target);
             if (!def) {
                 return {
@@ -318,8 +320,8 @@ export async function main() {
         // validation; no weaker entry — the server's live cube-grant boundary is
         // unchanged). Guards against dispatcher self-reference / recursion.
         if (name === 'borg_tool') {
-            const inner = typeof args?.name === 'string' ? args.name : '';
-            if (!inner || inner === 'borg_tool' || inner === 'borg_describe-tool') {
+            const inner = canonicalToolName(typeof args?.name === 'string' ? args.name : '');
+            if (!inner || inner === 'borg_tool' || inner === 'borg_describe_tool') {
                 return {
                     content: [{ type: 'text', text: 'borg_tool: pass { name: "<borg_tool>", arguments: {...} } naming a real borg tool (not the dispatcher itself).' }],
                     isError: true,
@@ -581,7 +583,7 @@ export async function main() {
                     // No-cache invariant (T1.2 — 0.7.0): both `getCubeInfo` and
                     // `getRoleInfo` MUST fetch fresh per invocation. Never
                     // memoize / cache the cube or role payload in process memory
-                    // or in `cubes.json` — `borg_reassign-drone` changes the
+                    // or in `cubes.json` — `borg_reassign_drone` changes the
                     // calling drone's role in the DB, and subsequent
                     // `borg_cube` reads MUST reflect the new role within one
                     // round-trip. Locked in by the regression probe at
@@ -624,7 +626,7 @@ export async function main() {
                         // Sprint 6 / gh#153 discoverability nudge per drone-7 UX-FEEDBACK:
                         // point Coordinator-class readers at the tool that surfaces role IDs.
                         lines.push('');
-                        lines.push('_(Coordinator-class drones can fetch role IDs via `borg_list-roles` for use with `borg_reassign-drone`.)_');
+                        lines.push('_(Coordinator-class drones can fetch role IDs via `borg_list_roles` for use with `borg_reassign_drone`.)_');
                     }
                     lines.push('');
                     lines.push(getDronePlaybook(active.repositoryOrigin === undefined ? 'local' : 'origin'));
@@ -656,7 +658,7 @@ export async function main() {
                     ].join('\n');
                     return { content: [{ type: 'text', text }], structuredContent: { role } };
                 }
-                case 'borg_role-rationale': {
+                case 'borg_role_rationale': {
                     const active = await requireActiveCube();
                     const role = typeof args?.role === 'string' ? args.role : '';
                     const section = typeof args?.section === 'string' ? args.section : '';
@@ -687,7 +689,7 @@ export async function main() {
                         structuredContent: { cube_name: active.name, drones, roles, since: resolvedSince ?? null },
                     };
                 }
-                case 'borg_stream-status': {
+                case 'borg_stream_status': {
                     // Probe the in-process SSE consumer state. Does NOT require
                     // an active cube — if the consumer hasn't started or is
                     // between cubes, the snapshot still reports current values.
@@ -741,7 +743,7 @@ export async function main() {
                         },
                     };
                 }
-                case 'borg_read-log': {
+                case 'borg_read_log': {
                     const active = await requireActiveCube();
                     const since = typeof args?.since === 'string' ? args.since : undefined;
                     const limit = typeof args?.limit === 'number' ? args.limit : undefined;
@@ -791,11 +793,11 @@ export async function main() {
                     // non-cursor read) and will skip messages unless you keep reading.
                     if (has_more === true) {
                         lines.push('');
-                        lines.push(`⚠ has_more: true — call \`borg_read-log unread_only=true\` again until has_more=false so you finish draining unread entries.`);
+                        lines.push(`⚠ has_more: true — call \`borg_read_log unread_only=true\` again until has_more=false so you finish draining unread entries.`);
                     }
                     else if (typeof behind_by === 'number' && behind_by > 0) {
                         lines.push('');
-                        lines.push(`⚠ behind_by: ${behind_by} more unread ${behind_by === 1 ? 'entry' : 'entries'} addressed to you — call \`borg_read-log unread_only=true\` again until behind_by=0 so you don't skip messages.`);
+                        lines.push(`⚠ behind_by: ${behind_by} more unread ${behind_by === 1 ? 'entry' : 'entries'} addressed to you — call \`borg_read_log unread_only=true\` again until behind_by=0 so you don't skip messages.`);
                     }
                     return {
                         content: [{ type: 'text', text: lines.join('\n') }],
@@ -807,7 +809,7 @@ export async function main() {
                         }),
                     };
                 }
-                case 'borg_read-entry': {
+                case 'borg_read_entry': {
                     const active = await requireActiveCube();
                     const { entry, drones, roles } = await readLogEntry(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
                     const droneById = new Map(drones.map((drone) => [drone.id, drone]));
@@ -822,7 +824,7 @@ export async function main() {
                         structuredContent: { entry, drones, roles },
                     };
                 }
-                case 'borg_put-document': {
+                case 'borg_put_document': {
                     const active = await requireActiveCube();
                     const result = await putDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
                     return {
@@ -830,7 +832,7 @@ export async function main() {
                         structuredContent: { document: result.document },
                     };
                 }
-                case 'borg_get-document': {
+                case 'borg_get_document': {
                     const active = await requireActiveCube();
                     const result = await getDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
                     return {
@@ -838,7 +840,7 @@ export async function main() {
                         structuredContent: { document: result.document },
                     };
                 }
-                case 'borg_list-documents': {
+                case 'borg_list_documents': {
                     const active = await requireActiveCube();
                     const result = await listDocuments(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
                     const text = result.documents.length === 0
@@ -849,7 +851,7 @@ export async function main() {
                         structuredContent: { documents: result.documents },
                     };
                 }
-                case 'borg_remove-document': {
+                case 'borg_remove_document': {
                     const active = await requireActiveCube();
                     const result = await removeDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
                     return {
@@ -944,7 +946,7 @@ export async function main() {
                     const cited = formatDocumentCitations(result.entry.documents);
                     const citations = cited.length > 0 ? `\nDocuments: ${cited.join('; ')}` : '';
                     const advisory = result.advisory?.code === 'STORE_AS_DOCUMENT'
-                        ? `\nAdvisory: this message exceeded ${result.advisory.threshold_bytes} UTF-8 bytes. Store durable detail with borg_put-document, then cite its full id in borg_log.documents with an explicit borg_log.to audience.`
+                        ? `\nAdvisory: this message exceeded ${result.advisory.threshold_bytes} UTF-8 bytes. Store durable detail with borg_put_document, then cite its full id in borg_log.documents with an explicit borg_log.to audience.`
                         : '';
                     const shaAdvisory = shaAudit.unverified.length > 0
                         ? `\nAdvisory: unverified Git SHA(s): ${shaAudit.unverified.join(', ')}`
@@ -984,7 +986,7 @@ export async function main() {
                         structuredContent: { entry_id: entryId, kind, cube_name: active.name },
                     };
                 }
-                case 'borg_ack-status': {
+                case 'borg_ack_status': {
                     const active = await requireActiveCube();
                     const result = await getAckStatus(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
                     return {
@@ -1033,7 +1035,7 @@ export async function main() {
                         structuredContent: { decisions },
                     };
                 }
-                case 'borg_remove-decision': {
+                case 'borg_remove_decision': {
                     const topic = typeof args?.topic === 'string' ? args.topic : undefined;
                     const decisionId = typeof args?.decision_id === 'string' ? args.decision_id : undefined;
                     if (Number(topic !== undefined) + Number(decisionId !== undefined) !== 1) {
@@ -1050,11 +1052,11 @@ export async function main() {
                         structuredContent: { decision, cube_name: active.name },
                     };
                 }
-                case 'borg_list-cubes': {
+                case 'borg_list_cubes': {
                     const { cubes } = await listCubes();
                     if (!cubes.length) {
                         return {
-                            content: [{ type: 'text', text: 'No cubes yet. Use borg_create-cube to make your first one.' }],
+                            content: [{ type: 'text', text: 'No cubes yet. Use borg_create_cube to make your first one.' }],
                             structuredContent: { cubes: [] },
                         };
                     }
@@ -1064,7 +1066,7 @@ export async function main() {
                         structuredContent: { cubes },
                     };
                 }
-                case 'borg_create-cube': {
+                case 'borg_create_cube': {
                     const name = args?.name;
                     const cubeDirective = args?.cube_directive;
                     const templateName = args?.template ?? NEW_CUBE_TEMPLATE_PRESENTATIONS[0].name;
@@ -1098,7 +1100,7 @@ export async function main() {
                     // report it honestly, apply no template, and leave its directive
                     // untouched.
                     if (result === 'resolved') {
-                        const text = `A cube already exists for this repository: **${cube.name}** (id: ${cube.id}). The local Borg server homes one cube per repository; its directive was left unchanged. Use borg_assimilate ${cube.name} to join it, or borg_update-cube to change its settings.`;
+                        const text = `A cube already exists for this repository: **${cube.name}** (id: ${cube.id}). The local Borg server homes one cube per repository; its directive was left unchanged. Use borg_assimilate ${cube.name} to join it, or borg_update_cube to change its settings.`;
                         return {
                             content: [{ type: 'text', text }],
                             structuredContent: { cube, result: 'resolved', template: null, roles_created: null, roles_updated: null },
@@ -1119,7 +1121,7 @@ export async function main() {
                         },
                     };
                 }
-                case 'borg_update-cube': {
+                case 'borg_update_cube': {
                     const cubeId = args?.cube_id;
                     if (!cubeId)
                         throw new Error('cube_id is required');
@@ -1138,7 +1140,7 @@ export async function main() {
                         structuredContent: { cube, advisory: advisory ?? null },
                     };
                 }
-                case 'borg_patch-taxonomy-class': {
+                case 'borg_patch_taxonomy_class': {
                     const cubeId = args?.cube_id;
                     if (!cubeId)
                         throw new Error('cube_id is required');
@@ -1169,7 +1171,7 @@ export async function main() {
                         structuredContent: { action, class: label, cube },
                     };
                 }
-                case 'borg_delete-cube': {
+                case 'borg_delete_cube': {
                     const cubeId = args?.cube_id;
                     if (!cubeId)
                         throw new Error('cube_id is required');
@@ -1183,7 +1185,7 @@ export async function main() {
                         structuredContent: { cube_id: cubeId, deleted: true },
                     };
                 }
-                case 'borg_create-role': {
+                case 'borg_create_role': {
                     const cubeId = args?.cube_id;
                     const name = args?.name;
                     const shortDesc = args?.short_description;
@@ -1224,7 +1226,7 @@ export async function main() {
                         structuredContent: { role, cube_id: cubeId },
                     };
                 }
-                case 'borg_update-role': {
+                case 'borg_update_role': {
                     const roleId = args?.role_id;
                     if (!roleId)
                         throw new Error('role_id is required');
@@ -1255,7 +1257,7 @@ export async function main() {
                         structuredContent: { role, advisory: advisory ?? null },
                     };
                 }
-                case 'borg_patch-role-section': {
+                case 'borg_patch_role_section': {
                     const roleId = args?.role_id;
                     if (!roleId)
                         throw new Error('role_id is required');
@@ -1289,7 +1291,7 @@ export async function main() {
                         structuredContent: { action, heading, role, advisory: advisory ?? null },
                     };
                 }
-                case 'borg_delete-role': {
+                case 'borg_delete_role': {
                     const roleId = args?.role_id;
                     if (!roleId)
                         throw new Error('role_id is required');
@@ -1299,7 +1301,7 @@ export async function main() {
                         structuredContent: { role_id: roleId, deleted: true },
                     };
                 }
-                case 'borg_reassign-drone': {
+                case 'borg_reassign_drone': {
                     const reassigned = await runReassignDroneTool({
                         droneId: args?.drone_id,
                         roleId: args?.role_id,
@@ -1313,7 +1315,7 @@ export async function main() {
                         },
                     };
                 }
-                case 'borg_evict-drone': {
+                case 'borg_evict_drone': {
                     const evicted = await runEvictDroneTool(args);
                     return {
                         content: [{ type: 'text', text: evicted.text }],
@@ -1325,7 +1327,7 @@ export async function main() {
                         },
                     };
                 }
-                case 'borg_list-drones': {
+                case 'borg_list_drones': {
                     const cubeId = args?.cube_id;
                     if (!cubeId)
                         throw new Error('cube_id is required');
@@ -1352,11 +1354,11 @@ export async function main() {
                         structuredContent: { cube_id: cubeId, drones, roles },
                     };
                 }
-                case 'borg_list-roles': {
+                case 'borg_list_roles': {
                     // Sprint 6 / gh#153: surface role IDs to Coordinator-class drones
-                    // for use with borg_reassign-drone (e.g. promoting a drone to Queen).
+                    // for use with borg_reassign_drone (e.g. promoting a drone to Queen).
                     // Uses the same cube-grant-scoped GET /api/cubes/:id endpoint as
-                    // borg_list-drones — data is already accessible to the cube owner
+                    // borg_list_drones — data is already accessible to the cube owner
                     // over the local server; this tool just makes role IDs
                     // discoverable inside the MCP tool namespace per drone-7's UX-FEEDBACK.
                     // Render logic extracted to list-roles-render.ts for testability
@@ -1370,7 +1372,7 @@ export async function main() {
                         structuredContent: { cube_id: cubeId, roles },
                     };
                 }
-                case 'borg_list-templates': {
+                case 'borg_list_templates': {
                     const names = listTemplateNames();
                     const lines = names.map((n) => {
                         const t = getTemplate(n);
@@ -1383,7 +1385,7 @@ export async function main() {
                         },
                     };
                 }
-                case 'borg_sync-roles': {
+                case 'borg_sync_roles': {
                     const cubeId = args?.cube_id;
                     const templateName = args?.template_name || 'software-dev';
                     const apply = args?.apply === true;
@@ -1402,7 +1404,7 @@ export async function main() {
                         structuredContent: { cube_id: cubeId, template: templateName, apply, result },
                     };
                 }
-                case 'borg_apply-template': {
+                case 'borg_apply_template': {
                     const cubeId = args?.cube_id;
                     const templateName = args?.template_name;
                     if (!cubeId)

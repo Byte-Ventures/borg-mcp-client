@@ -55,7 +55,7 @@ describe('OpenCode dual config and plugins', () => {
 });
 
 it('keeps V2 permission ordering and never grants the outer execute tool', async () => {
-  const rules = [{ action: '*', resource: '*', effect: 'ask' as const }, { action: 'borg_borg_read_*', resource: '*', effect: 'allow' as const }, { action: 'execute', resource: '*', effect: 'deny' as const }];
+  const rules = [{ action: '*', resource: '*', effect: 'ask' as const }, { action: 'borg_borg_read*', resource: '*', effect: 'allow' as const }, { action: 'execute', resource: '*', effect: 'deny' as const }];
   expect(effectiveOpenCodeV2Permission(rules, 'borg_borg_read_log')).toBe('allow');
   expect(effectiveOpenCodeV2Permission(rules, 'borg_borg_log')).toBe('ask');
   const update = vi.fn(async () => {});

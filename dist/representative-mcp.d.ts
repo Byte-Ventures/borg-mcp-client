@@ -14,7 +14,7 @@
 import type { Readable, Writable } from 'node:stream';
 import { type RepresentativeContext } from './representative-core.js';
 import { RepresentativeStateError } from './representative-db.js';
-export declare const REPRESENTATIVE_TOOL_NAMES: readonly ["borg_representative-status", "borg_representative-send", "borg_representative-read", "borg_representative-deliver", "borg_representative-ack"];
+export declare const REPRESENTATIVE_TOOL_NAMES: readonly ["borg_representative_status", "borg_representative_send", "borg_representative_read", "borg_representative_deliver", "borg_representative_ack"];
 export declare const REPRESENTATIVE_INSTRUCTIONS: string;
 export interface ServeRepresentativeOptions {
     /** Resolved on every call; a throw fails that call closed. */

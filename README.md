@@ -55,7 +55,7 @@ Every `borg_log` call requires an explicit `to` audience: use `"broadcast"` for
 the whole cube or a non-empty selector array for direct delivery. Omission,
 message prose, and taxonomy classes never choose recipients. Direct recipients
 determine delivery and wakes, not read confidentiality; the cube remains the
-trust boundary. Use `borg_read-log` to drain unread entries and `borg_read-entry`
+trust boundary. Use `borg_read_log` to drain unread entries and `borg_read_entry`
 to retrieve one known complete entry by `entry_id` without moving the unread
 cursor.
 
@@ -74,7 +74,9 @@ as unverified in the tool result for cross-repository citations.
   updating, and worktree maintenance. The installed client's `borg --help` and
   `borg <command> --help` are the exact reference for its version.
 - [MCP tool reference](https://borgmcp.ai/docs/tools/) lists the `borg_...`
-  tools available inside agent sessions.
+  tools available inside agent sessions. Tool names use underscores throughout;
+  see [tool-name migration](docs/TOOL_NAME_MIGRATION.md) before upgrading an
+  installation with tool-specific permissions or cached MCP declarations.
 - [Cube documents](docs/DOCUMENTS.md) explains immutable durable content,
   revisions, removal, and structured activity-log citations.
 - [Human representative](docs/HUMAN_REPRESENTATIVE.md) explains connecting an
@@ -115,7 +117,7 @@ persistent configuration snippets.
 
 ## Wake Recovery
 
-If `borg_regen` or `borg_stream-status` reports a wake-up problem, follow the
+If `borg_regen` or `borg_stream_status` reports a wake-up problem, follow the
 recovery command it prints. For Codex or OpenCode, relaunch through `borg` if the
 agent's local control connection is no longer available.
 

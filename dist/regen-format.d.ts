@@ -71,7 +71,7 @@ export declare function wakePathSteps(agentKind: AgentKind): string;
  */
 export declare function claudeMonitorCommandLine(inboxPath: string, monitorStateRoot?: string | null): string;
 /** Used in place of the command when it would not fit the lean budget. */
-export declare const CLAUDE_MONITOR_COMMAND_POINTER = "**Monitor command:** in `borg_stream-status` (too long here).";
+export declare const CLAUDE_MONITOR_COMMAND_POINTER = "**Monitor command:** in `borg_stream_status` (too long here).";
 /**
  * The SessionStart hook's output is shown through a preview of about 2 KB.
  * The lean orientation is always strictly shorter than this many UTF-8 bytes.

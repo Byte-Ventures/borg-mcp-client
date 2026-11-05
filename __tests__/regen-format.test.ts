@@ -383,7 +383,7 @@ describe('nullTaxonomyTip (gh#479)', () => {
 
   it('returns the verbatim UX-locked tip when taxonomy is null', () => {
     expect(nullTaxonomyTip(null)).toBe(
-      'Tip: no message taxonomy declared — set one to classify signal prefixes and dispatch/completion lifecycle. Every borg_log call still requires an explicit to audience. Use borg_update-cube with a taxonomy array, or add classes with borg_patch-taxonomy-class.'
+      'Tip: no message taxonomy declared — set one to classify signal prefixes and dispatch/completion lifecycle. Every borg_log call still requires an explicit to audience. Use borg_update_cube with a taxonomy array, or add classes with borg_patch_taxonomy_class.'
     );
   });
 
@@ -413,7 +413,7 @@ describe('formatRegenMarkdown — taxonomy tip (gh#479)', () => {
   it('appends the tip when the cube has no message_taxonomy', () => {
     const out = formatRegenMarkdown(baseResult(null));
     expect(out).toContain('no message taxonomy declared');
-    expect(out).toContain('borg_patch-taxonomy-class');
+    expect(out).toContain('borg_patch_taxonomy_class');
   });
 
   it('omits the tip when a taxonomy is declared (self-removing)', () => {
@@ -549,7 +549,7 @@ describe('formatRegenMarkdown — lite mode (gh#496-B)', () => {
     // Core operational text stays inline; rationale prose compresses to a stub.
     expect(fullOut).toContain('Workflow:\n- build things');
     expect(fullOut).toContain('Design rationale:');
-    expect(fullOut).toContain('borg_role-rationale "Builder" "Design rationale"');
+    expect(fullOut).toContain('borg_role_rationale "Builder" "Design rationale"');
     expect(fullOut).not.toContain('WHY we build this way and case studies');
   });
 
@@ -559,7 +559,7 @@ describe('formatRegenMarkdown — lite mode (gh#496-B)', () => {
     const compressed = compressRoleText('Builder', stored);
     // The drone sees stubs, not the rationale prose.
     expect(compressed).not.toContain('WHY git hygiene matters');
-    expect(compressed).toContain('borg_role-rationale');
+    expect(compressed).toContain('borg_role_rationale');
 
     // Simulate getRoleRationale: resolve a heading against the STORED text.
     const storedSections = parseRoleSections(stored);
@@ -571,7 +571,7 @@ describe('formatRegenMarkdown — lite mode (gh#496-B)', () => {
     const reconstructed = parseRoleSections(compressed)
       .map((s) => {
         if (s.kind !== 'label' || s.heading == null) return s.body;
-        const stubLine = s.body.split('\n').find((l) => l.includes('borg_role-rationale'));
+        const stubLine = s.body.split('\n').find((l) => l.includes('borg_role_rationale'));
         if (!stubLine) return s.body;
         const parsed = parseRationalePointer(stubLine);
         return parsed ? resolve(parsed.section) : s.body;
@@ -695,7 +695,7 @@ describe('formatRegenMarkdown — cube log out of regen (gh#886)', () => {
     const out = formatRegenMarkdown(result({ behind_by: 3, recentLog: sampleLog }));
     expect(out).toContain('## Cube log');
     expect(out).toContain('You have **3** unread log entries');
-    expect(out).toContain('borg_read-log unread_only=true');
+    expect(out).toContain('borg_read_log unread_only=true');
     // the payload itself is NOT inlined — the whole point of gh#886
     expect(out).not.toContain(LOG_ENTRY_TEXT);
   });
@@ -720,7 +720,7 @@ describe('formatRegenMarkdown — cube log out of regen (gh#886)', () => {
     // defends the brief new-worker-meets-not-yet-updated-client skew.
     const out = formatRegenMarkdown(result({ recentLog: sampleLog })); // no behind_by
     expect(out).toContain('## Cube log');
-    expect(out).toContain('borg_read-log unread_only=true');
+    expect(out).toContain('borg_read_log unread_only=true');
     expect(out).not.toContain(LOG_ENTRY_TEXT); // payload never inlined
   });
 });
@@ -786,7 +786,7 @@ describe('DRONE_PLAYBOOK core/chapter split (gh#912)', () => {
     expect(core).toContain('SOURCE-OF-TRUTH');
     // safety floor stays inline (SEC rail)
     expect(core).toContain('git diff --staged --stat');
-    expect(core).toContain('borg_read-log unread_only=true');
+    expect(core).toContain('borg_read_log unread_only=true');
     // the smart pointer to the chapter
     expect(core).toContain('borg_playbook');
   });
@@ -849,7 +849,7 @@ describe('ARRIVAL instruction process state (gh#136)', () => {
     const playbook = getDronePlaybook();
     const combined = `${playbook}\n${CUBE_ACTIVITY_RESUME_WAKE_MESSAGE}`;
     const startupIndex = combined.indexOf('**Required one-time startup setup:**');
-    const wakeDrainIndex = combined.indexOf('1. Drain `borg_read-log unread_only=true`');
+    const wakeDrainIndex = combined.indexOf('1. Drain `borg_read_log unread_only=true`');
 
     expect(startupIndex).toBeGreaterThanOrEqual(0);
     expect(wakeDrainIndex).toBeGreaterThan(startupIndex);
@@ -983,12 +983,12 @@ describe('wakePathArming', () => {
     });
 
     it('drains on every wake and re-arms an exited Monitor before draining', () => {
-      expect(arming).toContain('borg_read-log unread_only=true');
+      expect(arming).toContain('borg_read_log unread_only=true');
       expect(arming).toMatch(/if.*empty/i);
       expect(arming).toMatch(/without a full regen/i);
       expect(arming).toMatch(/liveness post/i);
       expect(arming).toContain(
-        'on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
+        'on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read_log unread_only=true`.',
       );
       expect(arming).toMatch(/resume prior work/i);
       const recovery = arming.split('\n').find((line) => line.startsWith('3. '))!;
@@ -1020,15 +1020,15 @@ describe('wakePathArming', () => {
       expect(arming).toBe([
         'Arm your wake path before working:',
         '1. **Inbox Monitor** — run a persistent Monitor on the **Monitor command** below; cube posts wake you.',
-        '2. **On every wake** — drain `borg_read-log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
-        '3. **Monitor recovery** — on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
+        '2. **On every wake** — drain `borg_read_log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
+        '3. **Monitor recovery** — on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read_log unread_only=true`.',
         `4. **Monitor not armed** — ${CLAUDE_MONITOR_LOOP_FALLBACK} ${CLAUDE_MONITOR_DENIED_FALLBACK}`,
         `**Monitor command:** \`borg-inbox-monitor --state-root '${monitorStateRoot}' '${inboxPath}'\``,
       ].join('\n'));
       expect(arming).toBe(`${wakePathSteps('claude')}\n**Monitor command:** \`borg-inbox-monitor --state-root '${monitorStateRoot}' '${inboxPath}'\``);
       expect(wakePathSteps('claude')).not.toContain(inboxPath);
       // Draining is defined (with its exact call) before the fallbacks refer to it.
-      expect(arming.indexOf('drain `borg_read-log unread_only=true`')).toBeLessThan(arming.indexOf('/loop'));
+      expect(arming.indexOf('drain `borg_read_log unread_only=true`')).toBeLessThan(arming.indexOf('/loop'));
     });
   });
 
@@ -1039,7 +1039,7 @@ describe('wakePathArming', () => {
       expect(arming.toLowerCase()).toContain('app-server');
       expect(arming).toContain('Borg activity stream');
       expect(arming).toContain('inbox wake channel');
-      expect(arming).toContain('borg_read-log unread_only=true');
+      expect(arming).toContain('borg_read_log unread_only=true');
       expect(arming).toContain('Degraded fallback');
       expect(arming).toContain('borg_regen mode="full"');
       expect(arming).not.toContain('borg-inbox-monitor');
@@ -1050,7 +1050,7 @@ describe('wakePathArming', () => {
     it('keeps the exact Codex guidance, without the Claude Monitor steps', () => {
       expect(arming).toBe([
         'Required Codex wake path: Borg activity stream → inbox wake channel via app-server remote control.',
-        'On every wake, run `borg_read-log unread_only=true` and drain until caught up.',
+        'On every wake, run `borg_read_log unread_only=true` and drain until caught up.',
         'No additional scheduler setup is required.',
         'Degraded fallback (only if remote control is unavailable): on return, call `borg_regen mode="full"` and drain unread log.',
       ].join(' '));
@@ -1123,9 +1123,9 @@ describe('formatLeanOrientation', () => {
     expect(out).toContain('inbox-monitor');
     expect(out).toContain('--state-root');
     expect(out).toContain(base.monitorStateRoot);
-    expect(out).toContain('borg_read-log unread_only=true');
+    expect(out).toContain('borg_read_log unread_only=true');
     expect(out).toContain(
-      'on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
+      'on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read_log unread_only=true`.',
     );
     expect(out).toContain(wakePathSteps('claude'));
     expect(out).toContain(
@@ -1207,7 +1207,7 @@ describe('formatLeanOrientation', () => {
         '# Borg drone orientation',
         '',
         "_(`/clear` cleared Claude's conversation — re-arm the inbox Monitor now.)_",
-        '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, re-arm the Monitor, then drain the unread log._',
+        '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream_status` + `borg_roster`; call `borg_regen mode="full"`, re-arm the Monitor, then drain the unread log._',
         '',
         "You are a Borg drone — coordinate through the cube log, and never pause for the user. Blocked → escalate to your cube's coordinating role.",
         '',
@@ -1235,7 +1235,7 @@ describe('formatLeanOrientation', () => {
         source: 'clear',
       });
       expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(LEAN_ORIENTATION_BUDGET_BYTES);
-      expect(out).toMatch(/\*\*Monitor command:\*\* (`borg-inbox-monitor |in `borg_stream-status`)/);
+      expect(out).toMatch(/\*\*Monitor command:\*\* (`borg-inbox-monitor |in `borg_stream_status`)/);
       expect(out.isWellFormed()).toBe(true);
     });
 
@@ -1267,7 +1267,7 @@ describe('formatLeanOrientation', () => {
                 expect(out).toContain(part);
               }
               if (agentKind === 'claude') {
-                expect(out).toMatch(/\*\*Monitor command:\*\* (`borg-inbox-monitor |in `borg_stream-status`)/);
+                expect(out).toMatch(/\*\*Monitor command:\*\* (`borg-inbox-monitor |in `borg_stream_status`)/);
               } else {
                 expect(out).not.toContain('**Monitor command:**');
               }
@@ -1337,7 +1337,7 @@ describe('formatLeanOrientation', () => {
     expect(out.toLowerCase()).toContain('app-server');
     expect(out).toContain('Borg activity stream');
     expect(out).toContain('inbox wake channel');
-    expect(out).toContain('borg_read-log unread_only=true');
+    expect(out).toContain('borg_read_log unread_only=true');
     expect(out).toContain('Degraded fallback');
     expect(out).not.toContain('borg-inbox-monitor');
     expect(out).not.toContain('/loop');
@@ -1349,10 +1349,10 @@ describe('formatLeanOrientation', () => {
     expect(out).toContain('OpenCode wakes through HTTP entry injection');
     expect(out).toContain('durable inbox');
     expect(out).toContain('delivered-unconfirmed');
-    expect(out).toContain('borg_stream-status');
-    expect(out).toContain('borg_read-log unread_only=true');
+    expect(out).toContain('borg_stream_status');
+    expect(out).toContain('borg_read_log unread_only=true');
     expect(out).not.toContain('wakes reliably');
-    expect(out).not.toContain('check activity by calling borg_read-log periodically');
+    expect(out).not.toContain('check activity by calling borg_read_log periodically');
   });
 
   it('adds a /clear-specific note when Claude wake state was cleared', () => {
@@ -1363,10 +1363,10 @@ describe('formatLeanOrientation', () => {
   it('adds the compact Claude quiet-clear fallback and wake-path re-arm', () => {
     const out = formatLeanOrientation({ ...base, source: 'clear' });
     expect(out).toMatch(/quiet-clear fallback.*later turn.*silence/i);
-    expect(out).toContain('borg_stream-status');
+    expect(out).toContain('borg_stream_status');
     expect(out).toContain('borg_roster');
     expect(out).toContain('borg_regen mode="full"');
-    expect(out).toContain('borg_read-log unread_only=true');
+    expect(out).toContain('borg_read_log unread_only=true');
     expect(out).toContain('Monitor');
     expect(out).toContain(
       'call `borg_regen mode="full"`, re-arm the Monitor, then drain the unread log.',
@@ -1380,9 +1380,9 @@ describe('formatLeanOrientation', () => {
       expect(out).not.toContain('borg_roster');
       expect(out).not.toContain('Quiet-clear fallback');
       if (agentKind === 'codex') {
-        expect(out).not.toContain('borg_stream-status');
+        expect(out).not.toContain('borg_stream_status');
       } else {
-        expect(out).toContain('borg_stream-status');
+        expect(out).toContain('borg_stream_status');
       }
     }
   });
@@ -1410,7 +1410,7 @@ describe('formatLeanOrientation', () => {
     expect(formatLeanOrientation({ ...base, source: 'startup' })).not.toContain('/clear');
     expect(formatLeanOrientation(base)).not.toContain('/clear');
     for (const source of ['startup', 'resume', 'compact']) {
-      expect(formatLeanOrientation({ ...base, source })).not.toContain('borg_stream-status');
+      expect(formatLeanOrientation({ ...base, source })).not.toContain('borg_stream_status');
       expect(formatLeanOrientation({ ...base, source })).not.toContain('borg_roster');
     }
   });

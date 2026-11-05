@@ -19,7 +19,7 @@
  *   - Outer `runLoop` reconnects with exponential backoff on any
  *     stream-level error, including heartbeat watchdog firing.
  *
- * State exposed via `getStreamStatus()` so the `borg_stream-status`
+ * State exposed via `getStreamStatus()` so the `borg_stream_status`
  * MCP tool can probe without perturbing the stream (no second
  * connection, no second auth — just an in-process state snapshot).
  */

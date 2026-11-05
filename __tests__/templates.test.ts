@@ -2,8 +2,8 @@
  * Tests for cube template shipping.
  *
  * Covers the `cube_directive` field added to the Template interface +
- * the no-clobber resolution helpers used by the `borg_create-cube` and
- * `borg_apply-template` handlers in index.ts.
+ * the no-clobber resolution helpers used by the `borg_create_cube` and
+ * `borg_apply_template` handlers in index.ts.
  *
  * Design rationale: handlers in index.ts call `resolveCubeDirectiveForCreate`
  * (at cube-creation time) and `resolveCubeDirectiveForApply` (at
@@ -176,7 +176,7 @@ describe('Template.cube_directive field', () => {
     expect(coord?.detailed_description).toContain('START NOW');
     expect(coord?.detailed_description).toContain('ACK and CLAIM are receipt only');
     expect(coord?.detailed_description).toContain('Verify activation and progress against the concrete milestones');
-    expect(coord?.detailed_description).toContain('borg_ack-status');
+    expect(coord?.detailed_description).toContain('borg_ack_status');
     expect(coord?.detailed_description).toContain('without advancing unread cursors');
   });
 

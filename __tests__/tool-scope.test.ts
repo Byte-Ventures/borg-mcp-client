@@ -38,17 +38,17 @@ describe('tool-scope role filtering (gh#899)', () => {
   });
 
   it('decision removal is native only for management seats', () => {
-    expect(MANAGEMENT_TOOLS).toContain('borg_remove-decision');
-    expect(deferredToolNames(WORKER).has('borg_remove-decision')).toBe(true);
-    expect(deferredToolNames(COORDINATOR).has('borg_remove-decision')).toBe(false);
+    expect(MANAGEMENT_TOOLS).toContain('borg_remove_decision');
+    expect(deferredToolNames(WORKER).has('borg_remove_decision')).toBe(true);
+    expect(deferredToolNames(COORDINATOR).has('borg_remove_decision')).toBe(false);
   });
 
   it('acknowledgement status is native for every role', () => {
-    expect(UNIVERSAL_TOOLS).toContain('borg_ack-status');
+    expect(UNIVERSAL_TOOLS).toContain('borg_ack_status');
   });
 
   it('single-entry reads are native for every role', () => {
-    expect(UNIVERSAL_TOOLS).toContain('borg_read-entry');
+    expect(UNIVERSAL_TOOLS).toContain('borg_read_entry');
   });
 
   it('human-seat (Coordinator): full set, nothing hidden', () => {
@@ -75,7 +75,7 @@ describe('tool-scope role filtering (gh#899)', () => {
   it('dispatcher tools are always present even for a worker', () => {
     const names = new Set(filterToolsForRole(ALL, WORKER).map((t) => t.name));
     expect(names.has('borg_tool')).toBe(true);
-    expect(names.has('borg_describe-tool')).toBe(true);
+    expect(names.has('borg_describe_tool')).toBe(true);
   });
 
   it('fail-safe: an unmapped tool name is NEVER hidden (defaults to native)', () => {

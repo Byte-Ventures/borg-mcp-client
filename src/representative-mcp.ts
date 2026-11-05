@@ -31,14 +31,9 @@ import {
 } from './representative-core.js';
 import { RepresentativeStoreError, bindingFingerprint } from './representative-store.js';
 import { RepresentativeStateError } from './representative-db.js';
+import { canonicalToolName, REPRESENTATIVE_CANONICAL_TOOL_NAMES } from './tool-names.js';
 
-export const REPRESENTATIVE_TOOL_NAMES = [
-  'borg_representative-status',
-  'borg_representative-send',
-  'borg_representative-read',
-  'borg_representative-deliver',
-  'borg_representative-ack',
-] as const;
+export const REPRESENTATIVE_TOOL_NAMES = REPRESENTATIVE_CANONICAL_TOOL_NAMES;
 
 export const REPRESENTATIVE_INSTRUCTIONS =
   'You are connected as the human representative of one Borg cube: an automated delegate that relays the ' +
@@ -50,14 +45,14 @@ export const REPRESENTATIVE_INSTRUCTIONS =
 
 const TOOLS = [
   {
-    name: 'borg_representative-status',
+    name: 'borg_representative_status',
     description:
       'Show which cube, representative drone and Coordinator this connection is bound to, whether the live cube still matches, ' +
       'any unresolved (ambiguous) sends and the delivery limits. Read-only.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
-    name: 'borg_representative-send',
+    name: 'borg_representative_send',
     description:
       'Relay ONE human request, question or decision to the bound Coordinator. The recipient is fixed; workers and broadcast ' +
       'are not addressable. Returns a request_id. If the outcome is "ambiguous" (the result names the cause), retry only ' +
@@ -85,11 +80,11 @@ const TOOLS = [
     },
   },
   {
-    name: 'borg_representative-read',
+    name: 'borg_representative_read',
     description:
       'Read the bound Coordinator\'s replies addressed to this representative that come after your delivered checkpoint, ' +
       'oldest first. Reading changes nothing: the same replies return on every call until you call ' +
-      'borg_representative-deliver. Persist each reply durably, route it by in_reply_to or hold it for the human, then ' +
+      'borg_representative_deliver. Persist each reply durably, route it by in_reply_to or hold it for the human, then ' +
       'deliver through the last one you persisted. At most `limit` replies and `max_bytes` of serialized result; a reply ' +
       'larger than max_bytes is returned whole and alone with oversize:true, and the result never exceeds ' +
       'max(max_bytes, 16384) bytes (oversize citations reduced to ids, documents_reduced:true). has_more means more ' +
@@ -109,12 +104,12 @@ const TOOLS = [
     },
   },
   {
-    name: 'borg_representative-deliver',
+    name: 'borg_representative_deliver',
     description:
       'Record that every reply up to and including `through` is durably persisted by the host. Only this call moves the ' +
-      'read window. `through` must be a reply borg_representative-read returned; the same or an older id is a no-op ' +
+      'read window. `through` must be a reply borg_representative_read returned; the same or an older id is a no-op ' +
       '(advanced:false). Call it only after durable persistence: a delivered reply is not returned again. It does not ' +
-      'notify the Coordinator; that is borg_representative-ack.',
+      'notify the Coordinator; that is borg_representative_ack.',
     inputSchema: {
       type: 'object',
       properties: { through: { type: 'string', description: 'entry_id of the last reply you persisted.' } },
@@ -123,10 +118,10 @@ const TOOLS = [
     },
   },
   {
-    name: 'borg_representative-ack',
+    name: 'borg_representative_ack',
     description:
-      'Signal to the Coordinator that one of its direct replies (entry_id from borg_representative-read) was received. ' +
-      'It is only that signal: it is not delivery, does not move the read window (that is borg_representative-deliver), ' +
+      'Signal to the Coordinator that one of its direct replies (entry_id from borg_representative_read) was received. ' +
+      'It is only that signal: it is not delivery, does not move the read window (that is borg_representative_deliver), ' +
       'and is not needed for reading.',
     inputSchema: {
       type: 'object',
@@ -185,13 +180,13 @@ export async function serveRepresentativeMcp(
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS.map((tool) => ({ ...tool })) }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const name = request.params.name;
+    const name = canonicalToolName(request.params.name);
     const args = request.params.arguments ?? {};
     try {
       if (!(REPRESENTATIVE_TOOL_NAMES as readonly string[]).includes(name)) {
         throw new RepresentativeError(ErrorCode.INVALID_INPUT, `Unknown tool ${JSON.stringify(name)}; this connection exposes only the representative tools.`);
       }
-      if (name === 'borg_representative-status' && options.stateProblemStatus) {
+      if (name === 'borg_representative_status' && options.stateProblemStatus) {
         // Status needs no binding to report an unusable state database.
         const resolved = await options.context().then((ctx) => ({ ctx }), (error: unknown) => {
           if (error instanceof RepresentativeStateError) return { problem: error };
@@ -201,7 +196,7 @@ export async function serveRepresentativeMcp(
       }
       const ctx = await options.context();
       const pinned = options.pinnedFingerprint ? { pinned_binding_fingerprint: options.pinnedFingerprint } : {};
-      if (name === 'borg_representative-status') {
+      if (name === 'borg_representative_status') {
         return toolResult({ ...await representativeStatus(ctx), ...pinned });
       }
       if (options.pinnedFingerprint && bindingFingerprint(ctx.binding) !== options.pinnedFingerprint) {
@@ -214,13 +209,13 @@ export async function serveRepresentativeMcp(
       // host processes may use these tools at once. A damaged or unsafe state
       // database refuses every effect; status stays available.
       switch (name) {
-        case 'borg_representative-send': {
+        case 'borg_representative_send': {
           const sent = await sendRepresentativeMessage(ctx, args);
           return toolResult(sent, sent.outcome === 'ambiguous');
         }
-        case 'borg_representative-read':
+        case 'borg_representative_read':
           return toolResult(await readRepresentativeReplies(ctx, args));
-        case 'borg_representative-deliver':
+        case 'borg_representative_deliver':
           return toolResult(await deliverRepresentativeReplies(ctx, args));
         default:
           return toolResult(await ackRepresentativeReply(ctx, args));

@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { BorgCli } from './cubes.js';
 import { borgHomeRoot } from './private-root.js';
+import { assertToolNamePoliciesMigrated, ToolNameMigrationError, toolPolicySpellings } from './tool-name-migration.js';
+import { claudeToolPolicyArgs, readClaudeEffectiveSettings } from './claude-effective-settings.js';
+import { inspectClaudePolicySources } from './claude-policy-sources.js';
+import type { CanonicalToolName } from './tool-names.js';
 
 /**
  * Client #20: the narrow coordination surface a borg-launched agent needs
@@ -11,21 +15,22 @@ import { borgHomeRoot } from './private-root.js';
  * smaller than the complete Borg MCP surface. borg_tool's transitive scope is
  * disclosed separately before consent.
  */
-export const BORG_COORDINATION_TOOLS = [
-  'regen',
-  'log',
-  'read-log',
-  'roster',
-  'ack',
-  'stream-status',
-  'whoami',
+const COORDINATION_NAMES = [
+  'borg_regen',
+  'borg_log',
+  'borg_read_log',
+  'borg_roster',
+  'borg_ack',
+  'borg_stream_status',
+  'borg_whoami',
   // Required by the canonical lean orientation before acting/after compaction.
-  'cube',
-  'role',
-  'playbook',
-  'tool',
-  'describe-tool',
-] as const;
+  'borg_cube',
+  'borg_role',
+  'borg_playbook',
+  'borg_tool',
+  'borg_describe_tool',
+] as const satisfies readonly CanonicalToolName[];
+export const BORG_COORDINATION_TOOLS = COORDINATION_NAMES.map(name => name.slice(5));
 
 export const CODEX_BORG_COORDINATION_TOOLS = BORG_COORDINATION_TOOLS.map(
   (name) => `borg:${name}`
@@ -91,6 +96,7 @@ function parseCodexModes(text: string): {
 
 export function codexApprovalRepairSnippet(tools = CODEX_BORG_COORDINATION_TOOLS): string {
   return tools
+    .flatMap(tool => toolPolicySpellings('codex', tool))
     .map(
       (tool) =>
         `[mcp_servers.borg.tools."${tool}"]\n` +
@@ -100,6 +106,12 @@ export function codexApprovalRepairSnippet(tools = CODEX_BORG_COORDINATION_TOOLS
 }
 
 export function inspectCodexBorgApprovals(config: unknown): ApprovalInspection {
+  const policy = typeof config === 'string'
+    ? { tools: Object.fromEntries(parseCodexModes(config).toolModes),
+        ...Object.fromEntries([...config.matchAll(/\b(enabled_tools|disabled_tools)\s*=\s*\[([^\]]*)\]/g)]
+          .map(([, key, list]) => [key, [...list.matchAll(/["']([^"']*)["']/g)].map(([, name]) => name)])) }
+    : borgConfigFragment(config);
+  assertToolNamePoliciesMigrated('codex', { tools: policy });
   let defaultMode: ApprovalAction | undefined;
   let toolModes = new Map<string, ApprovalAction>();
   if (typeof config === 'string') {
@@ -163,7 +175,7 @@ function effectiveOpenCodePermission(
 export function openCodeApprovalRepairObject(
   tools = OPENCODE_BORG_COORDINATION_TOOLS
 ): Record<string, OpenCodePermissionAction> {
-  return Object.fromEntries(tools.map((tool) => [tool, 'allow'])) as Record<
+  return Object.fromEntries(tools.flatMap(tool => toolPolicySpellings('opencode', tool)).map((tool) => [tool, 'allow'])) as Record<
     string,
     OpenCodePermissionAction
   >;
@@ -185,7 +197,7 @@ export function mergeOpenCodePermission(
   // Reinsert exact keys at the END. OpenCode resolves matching permission
   // patterns in order, so merely overwriting an earlier exact key would keep
   // its old insertion position and a later wildcard could still win.
-  const toolSet = new Set<string>(tools);
+  const toolSet = new Set<string>(tools.flatMap(tool => toolPolicySpellings('opencode', tool)));
   const preserved = Object.fromEntries(
     Object.entries(existing).filter(([key]) => !toolSet.has(key))
   );
@@ -193,6 +205,7 @@ export function mergeOpenCodePermission(
 }
 
 export function inspectOpenCodeBorgApprovals(config: unknown): ApprovalInspection {
+  assertToolNamePoliciesMigrated('opencode', config);
   const permission =
     config && typeof config === 'object' && !Array.isArray(config)
       ? (config as Record<string, unknown>).permission
@@ -214,12 +227,14 @@ export function codexBorgApprovalArgs(tools = CODEX_BORG_COORDINATION_TOOLS): st
   // supported way to address colon-named tools and deep-merges with the
   // remaining effective tool config.
   const toolTable = tools
+    .flatMap(tool => toolPolicySpellings('codex', tool))
     .map((tool) => `${JSON.stringify(tool)}={approval_mode="auto"}`)
     .join(',');
   return ['-c', `mcp_servers.borg.tools={${toolTable}}`];
 }
 
 export interface ApprovalIo {
+  readClaudeConfig?: () => Promise<unknown> | unknown;
   readCodexConfig: (approvalArgs?: string[]) => Promise<unknown> | unknown;
   readOpenCodeConfig: (permissionOverride?: string) => Promise<unknown> | unknown;
   isTTY: () => boolean;
@@ -231,6 +246,8 @@ export interface EffectiveConfigOptions {
   env: NodeJS.ProcessEnv;
   /** User-selected Codex profile/config flags, in their launch precedence. */
   codexArgs: string[];
+  claudeArgs?: string[];
+  loadClaude?: typeof readClaudeEffectiveSettings;
   loadCodex?: (
     args: string[],
     cwd: string,
@@ -518,6 +535,9 @@ export async function readCodexEffectiveConfig(
   runtime: CodexEffectiveConfigRuntime = {}
 ): Promise<unknown> {
   const snapshot = await readCodexConfigSnapshot(args, cwd, env, runtime);
+  for (const layer of snapshot.layers ?? []) {
+    if (!layer.disabledReason) assertToolNamePoliciesMigrated('codex', { tools: borgConfigFragment(layer.config) });
+  }
   if (!runtime.profile) return snapshot.config ?? null;
   const profileConfig = await withNativeCodexProfileLayer<unknown>(
     runtime.profile,
@@ -563,7 +583,15 @@ export function defaultApprovalIo(
       readCodexEffectiveConfig(args, loadCwd, loadEnv, { profile })
   );
   const loadOpenCode = options.loadOpenCode ?? readOpenCodeEffectiveConfig;
+  const loadClaude = options.loadClaude ?? readClaudeEffectiveSettings;
   return {
+    readClaudeConfig: async () => {
+      const args = options.claudeArgs ?? [];
+      assertToolNamePoliciesMigrated('claude', { permissions: claudeToolPolicyArgs(args) });
+      const settings = await loadClaude(args, cwd, env);
+      inspectClaudePolicySources(args, cwd, env, settings);
+      return settings;
+    },
     readCodexConfig: (approvalArgs = []) => {
       const args = [...approvalArgs, ...selectedCodexArgs];
       return selectedCodexProfile === undefined
@@ -587,22 +615,32 @@ export async function resolveLaunchBorgApprovals(
   io: ApprovalIo,
   options: { skipOverride?: boolean } = {}
 ): Promise<LaunchApprovalDecision> {
-  if (cli === 'claude') return { codexArgs: [] };
+  if (cli === 'claude') {
+    try {
+      if (!io.readClaudeConfig) throw new Error('Claude effective settings unavailable');
+      assertToolNamePoliciesMigrated('claude', await io.readClaudeConfig());
+    } catch (error) {
+      if (error instanceof ToolNameMigrationError) throw error;
+      throw new ToolNameMigrationError('claude', 'could not verify effective and managed settings with the installed Claude CLI; update Claude to a version supporting the native get_settings request before using this client.');
+    }
+    return { codexArgs: [] };
+  }
 
   let inspection: ApprovalInspection;
   let openCodeConfig: unknown;
   try {
     if (cli === 'codex') {
-      inspection = inspectCodexBorgApprovals(await io.readCodexConfig());
+      const config = await io.readCodexConfig();
+      if (config === null || config === undefined) throw new Error('Effective config unavailable');
+      inspection = inspectCodexBorgApprovals(config);
     } else {
       openCodeConfig = await io.readOpenCodeConfig();
+      if (!openCodeConfig || typeof openCodeConfig !== 'object' || Array.isArray(openCodeConfig)) throw new Error('Effective config unavailable');
       inspection = inspectOpenCodeBorgApprovals(openCodeConfig);
     }
   } catch (error: any) {
-    return {
-      codexArgs: [],
-      warning: `Could not inspect ${cli} Borg tool approvals: ${error?.message ?? error}. No approval override was applied.`,
-    };
+    if (error instanceof ToolNameMigrationError) throw error;
+    throw new ToolNameMigrationError(cli, 'could not verify effective tool policies with the installed CLI.');
   }
   if (inspection.restrictiveTools.length === 0) return { codexArgs: [] };
 

@@ -30,6 +30,13 @@ export interface DocsSection {
 
 export const DOCS_SECTIONS: DocsSection[] = [
   {
+    slug: "tool-name-migration",
+    title: "MCP tool-name migration",
+    url: `${REPOSITORY_URL}/blob/main/docs/TOOL_NAME_MIGRATION.md`,
+    summary: "Underscore tool names, legacy aliases, policy migration, and MCP rediscovery after upgrading.",
+    keywords: ["tool names", "underscore", "hyphen", "tool migration", "legacy aliases"],
+  },
+  {
     slug: "opencode",
     title: "OpenCode 1 and 2 integration",
     url: `${REPOSITORY_URL}/blob/main/docs/OPENCODE.md`,
@@ -97,21 +104,21 @@ export const DOCS_SECTIONS: DocsSection[] = [
     title: "Cube documents",
     url: DOCUMENTS_URL,
     summary: "Immutable cube-local Markdown or plain text, revisions, removal, and structured activity-log citations.",
-    keywords: ["document", "documents", "citation", "cite", "durable content", "supersede", "revision", "borg_put-document", "borg_get-document"],
+    keywords: ["document", "documents", "citation", "cite", "durable content", "supersede", "revision", "borg_put_document", "borg_get_document"],
   },
   {
     slug: "human-representative",
     title: "Human representative",
     url: HUMAN_REPRESENTATIVE_URL,
     summary: "A separate non-human-seat drone that relays the human's requests and decisions to one bound Coordinator over a restricted stdio MCP facade: prepare, host configuration, idempotent sends, replayable bounded reads with a delivered checkpoint, the push listener, and the one-command Hermes plugin install.",
-    keywords: ["representative", "hermes", "human representative", "delegate", "proxy", "borg representative", "borg_representative-send", "mcp host", "request_id", "ambiguous", "reset-state", "state database", "hermes-plugin", "hermes plugin install", "push"],
+    keywords: ["representative", "hermes", "human representative", "delegate", "proxy", "borg representative", "borg_representative_send", "mcp host", "request_id", "ambiguous", "reset-state", "state database", "hermes-plugin", "hermes plugin install", "push"],
   },
   {
     slug: "tools",
     title: "Tool reference",
     url: `${SITE_URL}/docs/tools/`,
     summary: "Every borg_* tool — name, description, params.",
-    keywords: ["tool", "tools", "api", "reference", "param", "borg_", "borg_read-entry", "entry_id", "exact entry"],
+    keywords: ["tool", "tools", "api", "reference", "param", "borg_", "borg_read_entry", "entry_id", "exact entry"],
   },
   {
     slug: "faq",

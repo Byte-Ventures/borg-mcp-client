@@ -45,8 +45,12 @@ export declare function startOpenCodeV2Broker(options: {
     descriptor: OpenCodeV2Descriptor;
     pluginVerificationKey: string;
     selectSession: (id: string) => Promise<void>;
-    call: (operation: string, body?: Record<string, unknown>) => Promise<any>;
+    call: (operation: string, body?: Record<string, unknown>, request?: {
+        signal?: AbortSignal;
+    }) => Promise<any>;
     close(): Promise<void>;
 }>;
-export declare function callOpenCodeV2Broker(descriptor: OpenCodeV2Descriptor, operation: string, body?: Record<string, unknown>): Promise<any>;
+export declare function callOpenCodeV2Broker(descriptor: OpenCodeV2Descriptor, operation: string, body?: Record<string, unknown>, request?: {
+    signal?: AbortSignal;
+}): Promise<any>;
 //# sourceMappingURL=opencode-v2-broker.d.ts.map

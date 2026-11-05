@@ -638,6 +638,7 @@ async function main() {
       cwd: approvalCwd,
       env: process.env,
       codexArgs: parsedCli.rest,
+      claudeArgs: parsedCli.rest,
     }),
     { skipOverride: parsedCli.noBorgApprovalOverride }
   );

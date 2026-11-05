@@ -498,6 +498,7 @@ async function main() {
         cwd: approvalCwd,
         env: process.env,
         codexArgs: parsedCli.rest,
+        claudeArgs: parsedCli.rest,
     }), { skipOverride: parsedCli.noBorgApprovalOverride });
     if (launchApproval.warning) {
         console.error(`${consolePrefix()}${chalk.yellow(`warning: ${launchApproval.warning}`)}`);

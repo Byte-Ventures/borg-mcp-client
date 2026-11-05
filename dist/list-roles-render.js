@@ -1,7 +1,7 @@
 /**
- * Sprint 6 / gh#153 — pure render function for `borg_list-roles` MCP tool.
+ * Sprint 6 / gh#153 — pure render function for `borg_list_roles` MCP tool.
  *
- * Extracted from the inline `case 'borg_list-roles'` handler in
+ * Extracted from the inline `case 'borg_list_roles'` handler in
  * `index.ts` per drone-3's QA-FAIL 2026-05-18T13:27:53Z so the render
  * logic is unit-testable without exercising the full MCP tool dispatch
  * stack. The handler simply calls `renderRoleList(roles, cubeId)` and
@@ -9,7 +9,7 @@
  */
 /**
  * Render the role registry for a cube as a markdown list with role IDs
- * exposed for use with `borg_reassign-drone`. Returns the empty-roles
+ * exposed for use with `borg_reassign_drone`. Returns the empty-roles
  * placeholder when the input array is empty.
  *
  * Each role line shape:
@@ -35,6 +35,6 @@ export function renderRoleList(roles, cubeId) {
         const desc = r.short_description || '_(no description)_';
         return `- **${r.name}**${tagSuffix} \`${r.id}\` — ${desc}`;
     });
-    return `Roles in cube ${cubeId} (${roles.length}):\n\n${lines.join('\n')}\n\nUse the role IDs above with \`borg_reassign-drone\` to change a drone's role.`;
+    return `Roles in cube ${cubeId} (${roles.length}):\n\n${lines.join('\n')}\n\nUse the role IDs above with \`borg_reassign_drone\` to change a drone's role.`;
 }
 //# sourceMappingURL=list-roles-render.js.map

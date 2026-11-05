@@ -14,7 +14,7 @@ function envelope(payload: unknown) {
   return JSON.stringify({ protocol_version: '14', request_id: 'apply-template-tool-test', payload });
 }
 
-describe('borg_apply-template orchestration authority', () => {
+describe('borg_apply_template orchestration authority', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
   let authority: any;
 

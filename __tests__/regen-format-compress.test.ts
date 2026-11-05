@@ -58,9 +58,10 @@ describe('gh#496-A(b) compressRoleText', () => {
   it('emitted stub round-trips via parseRationalePointer — MULTI-WORD role + heading (#502)', () => {
     const role = 'pre\n\nReview philosophy rationale:\nprose about review philosophy and why.\n';
     const out = compressRoleText('Code Reviewer', role);
-    const stubLine = out.split('\n').find((l) => l.includes('borg_role-rationale'));
+    const stubLine = out.split('\n').find((l) => l.includes('borg_role_rationale'));
     expect(stubLine).toBeDefined();
     const parsed = parseRationalePointer(stubLine!);
+    expect(parseRationalePointer(stubLine!.replace('borg_role_rationale', 'borg_role-rationale'))).toEqual(parsed);
     expect(parsed).not.toBeNull();
     expect(parsed!.role).toBe('Code Reviewer');
     expect(parsed!.section).toBe('Review philosophy rationale'); // sans-colon = the getRoleRationale key

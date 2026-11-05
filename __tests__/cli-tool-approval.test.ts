@@ -17,6 +17,7 @@ import {
   setupApprovalWarnings,
 } from '../src/cli-tool-approval.js';
 import { resolveCodexLaunchCwd } from '../src/codex-remote.js';
+import { toolPolicySpellings } from '../src/tool-name-migration.js';
 
 function codexEffective(mode: 'auto' | 'approve') {
   return {
@@ -30,6 +31,7 @@ function io(overrides: Partial<Parameters<typeof resolveLaunchBorgApprovals>[1]>
   return {
     readCodexConfig: () => '',
     readOpenCodeConfig: () => ({}),
+    readClaudeConfig: () => ({ effective: {}, sources: [] }),
     isTTY: () => true,
     confirm: vi.fn(async () => 'yes'),
     ...overrides,
@@ -52,21 +54,19 @@ function codexQueryDecision(
   child: ReturnType<typeof fakeCodexConfigChild>,
   runtime: { timeoutMs?: number; maxResponseBytes?: number } = {}
 ) {
-  return resolveLaunchBorgApprovals('codex', io({
-    readCodexConfig: () => readCodexEffectiveConfig([], '/repo', {}, {
+  return readCodexEffectiveConfig([], '/repo', {}, {
       spawnProcess: (() => child) as any,
       timeoutMs: runtime.timeoutMs ?? 100,
       ...(runtime.maxResponseBytes === undefined
         ? {}
         : { maxResponseBytes: runtime.maxResponseBytes }),
-    }),
-  }));
+    }).then(() => ({codexArgs: []}), error => ({codexArgs: [], warning: error.message}));
 }
 
 function expectStaticQueryFailure(result: Awaited<ReturnType<typeof codexQueryDecision>>) {
   expect(result.codexArgs).toEqual([]);
   expect(result.warning).toBe(
-    'Could not inspect codex Borg tool approvals: Codex effective-config query failed. No approval override was applied.'
+    'Codex effective-config query failed'
   );
 }
 
@@ -87,7 +87,7 @@ default_tools_approval_mode = "approve"
 
   it('leaves missing or already-auto coordination policy alone', () => {
     expect(inspectCodexBorgApprovals('').restrictiveTools).toEqual([]);
-    const config = CODEX_BORG_COORDINATION_TOOLS.map(
+    const config = CODEX_BORG_COORDINATION_TOOLS.flatMap(tool => toolPolicySpellings('codex', tool)).map(
       (tool) => `[mcp_servers.borg.tools."${tool}"]\napproval_mode = "auto"`
     ).join('\n');
     expect(inspectCodexBorgApprovals(config).restrictiveTools).toEqual([]);
@@ -97,7 +97,7 @@ default_tools_approval_mode = "approve"
     const args = codexBorgApprovalArgs();
     expect(args).toHaveLength(2);
     expect(args[0]).toBe('-c');
-    expect(args.join('\n')).toContain('borg:read-log');
+    expect(args.join('\n')).toContain('borg:read_log');
     expect(args.join('\n')).toContain('borg:cube');
     expect(args.join('\n')).toContain('borg:role');
     expect(args.join('\n')).toContain('borg:playbook');
@@ -145,12 +145,11 @@ default_tools_approval_mode = "approve"
 
 describe('Codex native effective-config query failures', () => {
   it('fails closed when process creation throws synchronously', async () => {
-    const result = await resolveLaunchBorgApprovals('codex', io({
+    await expect(resolveLaunchBorgApprovals('codex', io({
       readCodexConfig: () => readCodexEffectiveConfig([], '/repo', {}, {
         spawnProcess: (() => { throw new Error('spawn detail must not escape'); }) as any,
       }),
-    }));
-    expectStaticQueryFailure(result);
+    }))).rejects.toThrow('could not verify effective tool policies');
   });
 
   it('fails closed on a process spawn error', async () => {
@@ -167,7 +166,7 @@ describe('Codex native effective-config query failures', () => {
     const result = await decision;
     expect(result.codexArgs).toEqual([]);
     expect(result.warning).toBe(
-      'Could not inspect codex Borg tool approvals: Codex effective-config query exited before responding. No approval override was applied.'
+      'Codex effective-config query exited before responding'
     );
   });
 
@@ -249,7 +248,7 @@ describe('OpenCode Borg coordination approvals', () => {
       'borg_borg_*': 'ask',
       bash: 'deny',
     });
-    expect(Object.keys(reordered).at(-OPENCODE_BORG_COORDINATION_TOOLS.length)).toBe('borg_borg_regen');
+    expect(Object.keys(reordered).at(-OPENCODE_BORG_COORDINATION_TOOLS.flatMap(tool => toolPolicySpellings('opencode', tool)).length)).toBe('borg_borg_regen');
     expect(Object.keys(reordered).indexOf('borg_borg_*')).toBeLessThan(
       Object.keys(reordered).indexOf('borg_borg_regen')
     );
@@ -337,7 +336,7 @@ describe('launch approval', () => {
     expect(parsed.bash).toBe('deny');
     expect(Object.entries(parsed)
       .filter(([key, action]) => key.startsWith('borg_borg_') && action === 'allow')
-      .map(([key]) => key)).toEqual(OPENCODE_BORG_COORDINATION_TOOLS);
+      .map(([key]) => key)).toEqual(OPENCODE_BORG_COORDINATION_TOOLS.flatMap(tool => toolPolicySpellings('opencode', tool)));
   });
 
   it('fails closed when inline/managed OpenCode policy remains restrictive', async () => {

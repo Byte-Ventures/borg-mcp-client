@@ -55,7 +55,7 @@ describe('renderAssimilationWelcome — structural shape', () => {
     const out = renderAssimilationWelcome('one-of-one-coordinator', 'coordinator', 'my-project', false);
     expect(out).not.toContain('borg_role');
     expect(out).not.toContain('borg_cube');
-    expect(out).not.toContain('borg_read-log');
+    expect(out).not.toContain('borg_read_log');
   });
 
   it('does not contain "collective" (gh#P1 softened sci-fi tone)', () => {
