@@ -20,6 +20,13 @@ TUI environment; the MCP process receives a separate, session-scoped capability.
 The orientation plugin has its own capability for human-session handoffs; the
 MCP wake credential cannot authorize a handoff or change plugin readiness.
 
+Concurrent Borg OpenCode 2 launches queue their complete startup against the
+shared V2 database. This prevents independent native processes from racing
+database migrations and cold configuration initialization. A queued launch
+reports that it is waiting, with a five-minute queue limit. Once startup
+completes, sessions run independently. The startup mutex releases automatically
+if its launcher exits or crashes; saved sessions are preserved.
+
 After server identity is verified, configuration discovery and plugin readiness
 share a 60-second startup deadline. Cold plugin loading and file watchers can
 take longer than ordinary requests. Startup expiry closes the private server

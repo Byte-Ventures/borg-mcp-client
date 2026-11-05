@@ -2,6 +2,15 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { verifyOpenCodeServerVersion, } from './opencode-installation.js';
 const MAX_READY_BYTES = 16_384;
+/** Fixed, credential-free diagnostics that the launcher may safely preserve. */
+export class OpenCodeV2ServerStartError extends Error {
+    constructor(reason) {
+        const detail = reason === 'timeout' ? 'Startup verification timed out.'
+            : reason === 'exited' ? 'The private server process exited before startup verification completed.'
+                : 'Readiness, authentication, or process identity verification failed.';
+        super(`OpenCode 2 private server could not start or verify its identity. ${detail} No prompt was submitted.`);
+    }
+}
 /** Validate readiness before sending a credential to any reported endpoint. */
 export function validateOpenCodeV2Endpoint(input) {
     if (typeof input !== 'string')
@@ -73,7 +82,8 @@ export async function startOpenCodeV2Server(options) {
             clearTimeout(force);
         }
     })();
-    const timeout = setTimeout(() => controller.abort(), readyTimeoutMs);
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, readyTimeoutMs);
     try {
         const url = await readReadiness(child, controller.signal);
         const response = await (options.fetch ?? fetch)(`${url}/api/info`, {
@@ -97,11 +107,12 @@ export async function startOpenCodeV2Server(options) {
             tuiEnv: () => ({ OPENCODE_PASSWORD: password, OPENCODE_SERVER_PASSWORD: password }), closed, close };
     }
     catch (error) {
+        const exited = done;
         await close();
         if (error instanceof Error && 'code' in error && error.code === 'OPENCODE_EXECUTABLE_CHANGED')
             throw error;
         // Do not propagate fetch/spawn details (which can include credentials).
-        throw new Error('OpenCode 2 private server could not start or verify its identity. No prompt was submitted.');
+        throw new OpenCodeV2ServerStartError(timedOut ? 'timeout' : exited ? 'exited' : 'verification');
     }
     finally {
         clearTimeout(timeout);

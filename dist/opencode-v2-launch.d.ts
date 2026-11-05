@@ -12,7 +12,7 @@ export interface OpenCodeV2SessionArgs {
 export declare function parseOpenCodeV2SessionArgs(args: readonly string[]): OpenCodeV2SessionArgs;
 /** Native V2 config stays launch-local. JSONC files are read, never rewritten. */
 export declare function openCodeV2LaunchOverlay(env: NodeJS.ProcessEnv, descriptorPath: string, pluginDirectory: string, mcpCommand?: string[]): NodeJS.ProcessEnv;
-export declare function launchOpenCodeV2Process(options: {
+export interface OpenCodeV2LaunchOptions {
     installation: OpenCodeInstallation;
     cwd: string;
     env: NodeJS.ProcessEnv;
@@ -23,7 +23,8 @@ export declare function launchOpenCodeV2Process(options: {
     spawnProcess?: typeof spawn;
     /** Dependency seam for the opt-in native compatibility harness. */
     mcpCommand?: string[];
-}): Promise<{
+}
+export declare function launchOpenCodeV2Process(options: OpenCodeV2LaunchOptions): Promise<{
     process: ReturnType<typeof spawn>;
     cleanup: () => Promise<void>;
     completion: Promise<ChildCompletion>;

@@ -132,6 +132,12 @@ jobs:
         run: |
           node test/fixtures/opencode-v2-probe.mjs
           OPENCODE_TEST_DIRECT=1 node test/fixtures/opencode-v2-probe.mjs
+      - name: Exercise simultaneous native database upgrade
+        if: matrix.opencode == '2.2.5'
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/opencode-previous" --save-exact @opencode/cli@2.1.2
+          OPENCODE_TEST_V2_PREVIOUS_BINARY="$RUNNER_TEMP/opencode-previous/node_modules/@opencode/cli/bin/opencode.exe" node test/fixtures/opencode-v2-concurrent-startup-probe.mjs
 
   opencode-v1:
     name: OpenCode V1 retained (${{ matrix.opencode }})

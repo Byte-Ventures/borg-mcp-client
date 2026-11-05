@@ -1,5 +1,9 @@
 import { spawn } from 'node:child_process';
 import { type OpenCodeInstallation } from './opencode-installation.js';
+/** Fixed, credential-free diagnostics that the launcher may safely preserve. */
+export declare class OpenCodeV2ServerStartError extends Error {
+    constructor(reason: 'timeout' | 'exited' | 'verification');
+}
 export interface OpenCodeV2Server {
     readonly url: string;
     readonly pid: number | undefined;

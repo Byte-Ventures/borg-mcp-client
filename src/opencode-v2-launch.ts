@@ -7,7 +7,7 @@ import { fs } from './guarded-fs.js';
 import { parseJsonc } from './config-utils.js';
 import { applyOpenCodeV2LaunchPermissions } from './opencode-v2-permissions.js';
 import { inspectOpenCodeInstallation, verifyOpenCodeExecutableStillMatches, OpenCodeExecutableChangedError, type OpenCodeInstallation } from './opencode-installation.js';
-import { startOpenCodeV2Server } from './opencode-v2-server.js';
+import { startOpenCodeV2Server, OpenCodeV2ServerStartError } from './opencode-v2-server.js';
 import { createOpenCodeV2Transport } from './opencode-v2-transport.js';
 import { startOpenCodeV2Broker, OPENCODE_V2_DESCRIPTOR_ENV, OPENCODE_V2_VERIFICATION_KEY_ENV, type OpenCodeV2Seat } from './opencode-v2-broker.js';
 import { installLaunchOpenCodePlugin, migrateLegacyOpenCodePlugin } from './opencode-launch-plugin.js';
@@ -15,6 +15,7 @@ import { ToolNameMigrationError } from './tool-name-migration.js';
 import { selectOpenCodeAdapter } from './opencode-adapter.js';
 import { borgAgentConfigEnv, isCanonicalPath } from './private-root.js';
 import { openCodePrivateRoot, sameOpenCodeDirectory, openCodeWorktreeDirectory } from './opencode-private-state.js';
+import { withOpenCodeV2Startup } from './opencode-v2-startup.js';
 import { resolveMcpBinaryPath, resolveRegenPath } from './self-path.js';
 import { getActiveCube, BORG_LAUNCH_EXPECTED_SEAT_ENV } from './cubes.js';
 import type { ConfigEntry } from '@opencode/client';
@@ -104,13 +105,25 @@ function renderOrientation(directory: string, env: NodeJS.ProcessEnv): Promise<s
   });
 }
 
-export async function launchOpenCodeV2Process(options: {
+export interface OpenCodeV2LaunchOptions {
   installation: OpenCodeInstallation; cwd: string; env: NodeJS.ProcessEnv;
   prompt: string; passthroughArgs?: string[]; skipApprovalOverride?: boolean;
   seat?: OpenCodeV2Seat; spawnProcess?: typeof spawn;
   /** Dependency seam for the opt-in native compatibility harness. */
   mcpCommand?: string[];
-}): Promise<{ process: ReturnType<typeof spawn>; cleanup: () => Promise<void>; completion: Promise<ChildCompletion> }> {
+}
+
+export async function launchOpenCodeV2Process(options: OpenCodeV2LaunchOptions): Promise<{
+  process: ReturnType<typeof spawn>; cleanup: () => Promise<void>; completion: Promise<ChildCompletion>;
+}> {
+  return withOpenCodeV2Startup(() => launchOpenCodeV2ProcessLocked(options), {
+    onQueued: () => console.error('Waiting for another Borg OpenCode 2 session to finish startup…'),
+  });
+}
+
+async function launchOpenCodeV2ProcessLocked(options: OpenCodeV2LaunchOptions): Promise<{
+  process: ReturnType<typeof spawn>; cleanup: () => Promise<void>; completion: Promise<ChildCompletion>;
+}> {
   const args = parseOpenCodeV2SessionArgs(options.passthroughArgs ?? []);
   if (options.installation.minor < 1 || (options.installation.minor === 1 && options.installation.patch < 2)) {
     throw new Error('Borg requires OpenCode 2.1.2 or newer for OpenCode 2 integration.');
@@ -249,6 +262,9 @@ export async function launchOpenCodeV2Process(options: {
         continue;
       }
       if (error instanceof OpenCodeV2LaunchError || error instanceof ToolNameMigrationError) throw error;
+      if (error instanceof OpenCodeV2ServerStartError) {
+        throw new OpenCodeV2LaunchError(error.message.replace('No prompt was submitted.', 'No kickoff was submitted.'));
+      }
       throw new OpenCodeV2LaunchError(`OpenCode 2 failed during ${phase}. ${kickoffAttempted
         ? 'Kickoff admission is unconfirmed; inspect the session before submitting it again.'
         : 'No kickoff was submitted. Check the selected session and worktree, then relaunch Borg.'}`);

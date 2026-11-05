@@ -107,7 +107,7 @@ describe('OpenCode V2 private server lifecycle', () => {
 
   it('bounds stalled startup and terminates a child that ignores the lease', async () => {
     const h = harness({ stalled: true, ignoreLease: true });
-    await expect(h.start({ readyTimeoutMs: 10 })).rejects.toThrow('No prompt was submitted');
+    await expect(h.start({ readyTimeoutMs: 10 })).rejects.toThrow('Startup verification timed out.');
     expect(h.child.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
@@ -118,7 +118,7 @@ describe('OpenCode V2 private server lifecycle', () => {
       h.child.emit('error', new Error('OPENCODE_PASSWORD=do-not-print'));
       h.child.emit('close', -2, null);
     });
-    await expect(pending).rejects.toThrow('No prompt was submitted');
+    await expect(pending).rejects.toThrow('process exited before startup verification');
   });
 
   it('sanitizes synchronous spawn errors too', async () => {
