@@ -62,9 +62,13 @@ if (process.argv[2] === '--worker') {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'borg-native-shared-upgrade-'));
   const directories = Array.from({ length: 3 }, (_, i) => join(root, 'worktrees', 'repository', `drone-${i}`));
   directories.forEach(directory => mkdirSync(directory, { recursive: true }));
+  for (const name of ['appdata', 'localappdata', 'tmp']) mkdirSync(join(root, name));
   const env = {
     PATH: process.env.PATH, TMPDIR: process.env.TMPDIR,
     SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
+    COMSPEC: process.env.COMSPEC, PATHEXT: process.env.PATHEXT,
+    APPDATA: join(root, 'appdata'), LOCALAPPDATA: join(root, 'localappdata'),
+    TEMP: join(root, 'tmp'), TMP: join(root, 'tmp'),
     HOME: root, USERPROFILE: root, BORG_STATE_ROOT: root,
     XDG_CONFIG_HOME: join(root, 'config'), XDG_DATA_HOME: join(root, 'data'),
     XDG_STATE_HOME: join(root, 'state'), XDG_CACHE_HOME: join(root, 'cache'),

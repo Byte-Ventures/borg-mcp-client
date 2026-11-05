@@ -67,7 +67,10 @@ it('uses a cross-process mutex that releases after its holder is killed', async 
     await vi.waitFor(() => expect(output, diagnostic).toContain('locked'), { timeout: 10_000 });
     const queued = vi.fn();
     waiting = withOpenCodeV2Startup(async () => 'recovered', { root, onQueued: queued });
-    await vi.waitFor(() => expect(queued).toHaveBeenCalledTimes(1));
+    await Promise.race([
+      vi.waitFor(() => expect(queued).toHaveBeenCalledTimes(1), { timeout: 10_000 }),
+      waiting.then(() => { throw new Error('Contender entered while the holder was still running'); }),
+    ]);
     child.kill('SIGKILL');
     await closed;
     await expect(waiting).resolves.toBe('recovered');

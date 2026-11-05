@@ -60,7 +60,9 @@ foreach ($rule in $acl.Access) {
 const privateStateError = () => new Error('OpenCode private launch state must be owned by and accessible only to the current Windows user.');
 function windowsAcl(filename, initialize) {
     try {
-        execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsAclScript(initialize), 'utf16le').toString('base64')], { env: { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename }, stdio: 'ignore', timeout: 10_000, windowsHide: true });
+        // Cold PowerShell initialization can contend across independent launchers.
+        // Keep verification bounded without abandoning it during a batch startup.
+        execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsAclScript(initialize), 'utf16le').toString('base64')], { env: { ...process.env, BORG_OPENCODE_PRIVATE_PATH: filename }, stdio: 'ignore', timeout: 30_000, windowsHide: true });
     }
     catch {
         throw privateStateError();
