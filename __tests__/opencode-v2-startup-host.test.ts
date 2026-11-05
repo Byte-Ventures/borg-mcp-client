@@ -13,6 +13,14 @@ const worker = pathToFileURL(resolve('test/fixtures/opencode-startup-host-worker
 beforeEach(() => { root = mkdtempSync(join(realpathSync(tmpdir()), 'borg-startup-host-')); });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
+it('does not retain the queue when Borg dies before the supervisor loads', async () => {
+  const owner = spawn(process.execPath, [resolve('test/fixtures/opencode-startup-host-owner.mjs'), root, 'early-exit'], { stdio: 'ignore' });
+  await once(owner, 'exit');
+  await vi.waitFor(() => expect(existsSync(join(root, 'supervisor-pid'))).toBe(true), { timeout: 15_000 });
+  expect(existsSync(join(root, 'native-starting'))).toBe(false);
+  await withOpenCodeV2StartupHost(async () => {}, { root, worker, waitMs: 1000 });
+});
+
 it.each(process.platform === 'win32' ? ['launcher'] : ['launcher', 'supervisor'])('keeps exclusion after %s termination until its starting native child stops', async target => {
   const owner = spawn(process.execPath, [resolve('test/fixtures/opencode-startup-host-owner.mjs'), root], { stdio: 'ignore' });
   const closed = once(owner, 'exit');

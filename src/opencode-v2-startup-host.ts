@@ -143,6 +143,8 @@ export async function runOpenCodeV2StartupHost(startServer = startOpenCodeV2Serv
   process.once('disconnect', () => { void shutdown(); });
   process.once('SIGTERM', () => { void shutdown(); });
   process.once('SIGINT', () => { void shutdown(); });
+  // IPC can close before this module finishes loading and installs listeners.
+  if (!process.connected) void shutdown();
   try {
     await withOpenCodeV2Startup(async () => {
       send({ type: 'acquired' });
