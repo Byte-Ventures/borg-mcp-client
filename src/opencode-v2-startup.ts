@@ -9,12 +9,14 @@ import { loadSqlite } from './representative-db.js';
  * migration journals and cold config watchers cannot race across launchers.
  * A data-free SQLite mutex releases automatically on process death, including
  * SIGKILL. It never opens or changes the native OpenCode database.
- * Release before returning the running TUI; ordinary sessions stay concurrent.
+ * The startup supervisor owns this lock and the native child, so a launcher
+ * crash cannot release exclusion before the supervisor reaps that child.
  */
 export async function withOpenCodeV2Startup<T>(operation: () => Promise<T>, options: {
   root?: string;
   waitMs?: number;
   onQueued?: () => void;
+  signal?: AbortSignal;
 } = {}): Promise<T> {
   const root = options.root ?? openCodePrivateRoot();
   ensureOpenCodePrivateRoot(root);
@@ -40,6 +42,7 @@ export async function withOpenCodeV2Startup<T>(operation: () => Promise<T>, opti
     // this same Node process from completing its awaited startup and releasing.
     mutex.exec('PRAGMA busy_timeout = 0');
     for (;;) {
+      options.signal?.throwIfAborted();
       try {
         mutex.exec('PRAGMA journal_mode = MEMORY');
         mutex.exec('BEGIN EXCLUSIVE');

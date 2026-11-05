@@ -4,11 +4,13 @@ import { verifyOpenCodeServerVersion, } from './opencode-installation.js';
 const MAX_READY_BYTES = 16_384;
 /** Fixed, credential-free diagnostics that the launcher may safely preserve. */
 export class OpenCodeV2ServerStartError extends Error {
+    reason;
     constructor(reason) {
         const detail = reason === 'timeout' ? 'Startup verification timed out.'
             : reason === 'exited' ? 'The private server process exited before startup verification completed.'
                 : 'Readiness, authentication, or process identity verification failed.';
         super(`OpenCode 2 private server could not start or verify its identity. ${detail} No prompt was submitted.`);
+        this.reason = reason;
     }
 }
 /** Validate readiness before sending a credential to any reported endpoint. */
@@ -42,6 +44,7 @@ export async function startOpenCodeV2Server(options) {
     const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 3_000;
     let child;
     try {
+        options.signal?.throwIfAborted();
         child = (options.spawnProcess ?? spawn)(options.installation.executable, ['serve', '--stdio', '--hostname', '127.0.0.1', '--port', '0'], {
             cwd: options.directory,
             env: { ...options.env, OPENCODE_PASSWORD: password, OPENCODE_SERVER_PASSWORD: password },
@@ -84,6 +87,10 @@ export async function startOpenCodeV2Server(options) {
     })();
     let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, readyTimeoutMs);
+    const cancelled = () => controller.abort();
+    options.signal?.addEventListener('abort', cancelled, { once: true });
+    if (options.signal?.aborted)
+        cancelled();
     try {
         const url = await readReadiness(child, controller.signal);
         const response = await (options.fetch ?? fetch)(`${url}/api/info`, {
@@ -108,14 +115,16 @@ export async function startOpenCodeV2Server(options) {
     }
     catch (error) {
         const exited = done;
+        const expired = timedOut;
         await close();
         if (error instanceof Error && 'code' in error && error.code === 'OPENCODE_EXECUTABLE_CHANGED')
             throw error;
         // Do not propagate fetch/spawn details (which can include credentials).
-        throw new OpenCodeV2ServerStartError(timedOut ? 'timeout' : exited ? 'exited' : 'verification');
+        throw new OpenCodeV2ServerStartError(expired ? 'timeout' : exited ? 'exited' : 'verification');
     }
     finally {
         clearTimeout(timeout);
+        options.signal?.removeEventListener('abort', cancelled);
     }
 }
 function readReadiness(child, signal) {

@@ -24,8 +24,10 @@ Concurrent Borg OpenCode 2 launches queue their complete startup against the
 shared V2 database. This prevents independent native processes from racing
 database migrations and cold configuration initialization. A queued launch
 reports that it is waiting, with a five-minute queue limit. Once startup
-completes, sessions run independently. The startup mutex releases automatically
-if its launcher exits or crashes; saved sessions are preserved.
+completes, sessions run independently. A separate supervisor owns the startup
+mutex and native process. If the Borg launcher exits or crashes during startup,
+the supervisor stops its native child before releasing the mutex. Saved sessions
+are preserved.
 
 After server identity is verified, configuration discovery and plugin readiness
 share a 60-second startup deadline. Cold plugin loading and file watchers can

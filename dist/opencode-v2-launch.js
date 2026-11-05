@@ -7,7 +7,7 @@ import { fs } from './guarded-fs.js';
 import { parseJsonc } from './config-utils.js';
 import { applyOpenCodeV2LaunchPermissions } from './opencode-v2-permissions.js';
 import { inspectOpenCodeInstallation, verifyOpenCodeExecutableStillMatches, OpenCodeExecutableChangedError } from './opencode-installation.js';
-import { startOpenCodeV2Server, OpenCodeV2ServerStartError } from './opencode-v2-server.js';
+import { OpenCodeV2ServerStartError } from './opencode-v2-server.js';
 import { createOpenCodeV2Transport } from './opencode-v2-transport.js';
 import { startOpenCodeV2Broker, OPENCODE_V2_DESCRIPTOR_ENV, OPENCODE_V2_VERIFICATION_KEY_ENV } from './opencode-v2-broker.js';
 import { installLaunchOpenCodePlugin, migrateLegacyOpenCodePlugin } from './opencode-launch-plugin.js';
@@ -15,7 +15,7 @@ import { ToolNameMigrationError } from './tool-name-migration.js';
 import { selectOpenCodeAdapter } from './opencode-adapter.js';
 import { borgAgentConfigEnv, isCanonicalPath } from './private-root.js';
 import { openCodePrivateRoot, sameOpenCodeDirectory, openCodeWorktreeDirectory } from './opencode-private-state.js';
-import { withOpenCodeV2Startup } from './opencode-v2-startup.js';
+import { withOpenCodeV2StartupHost } from './opencode-v2-startup-host.js';
 import { resolveMcpBinaryPath, resolveRegenPath } from './self-path.js';
 import { getActiveCube, BORG_LAUNCH_EXPECTED_SEAT_ENV } from './cubes.js';
 export function preserveOpenCodeV2McpOptions(sources, ownedDescriptor, originalInline) {
@@ -114,11 +114,11 @@ function renderOrientation(directory, env) {
     });
 }
 export async function launchOpenCodeV2Process(options) {
-    return withOpenCodeV2Startup(() => launchOpenCodeV2ProcessLocked(options), {
+    return withOpenCodeV2StartupHost(host => launchOpenCodeV2ProcessLocked(options, host), {
         onQueued: () => console.error('Waiting for another Borg OpenCode 2 session to finish startup…'),
     });
 }
-async function launchOpenCodeV2ProcessLocked(options) {
+async function launchOpenCodeV2ProcessLocked(options, host) {
     const args = parseOpenCodeV2SessionArgs(options.passthroughArgs ?? []);
     if (options.installation.minor < 1 || (options.installation.minor === 1 && options.installation.patch < 2)) {
         throw new Error('Borg requires OpenCode 2.1.2 or newer for OpenCode 2 integration.');
@@ -165,7 +165,7 @@ async function launchOpenCodeV2ProcessLocked(options) {
         try {
             if (!isCanonicalPath(env.OPENCODE_DB))
                 throw new OpenCodeV2LaunchError('Borg OpenCode 2 database path contains a symlink. No kickoff was submitted.');
-            server = await startOpenCodeV2Server({ installation, directory, env });
+            server = await host.startServer({ installation, directory, env });
             // Native location discovery and plugin file watchers share a cold-start
             // budget; no individual request or retry can restart the deadline.
             startupTimer = setTimeout(() => startup.abort(), 60_000);

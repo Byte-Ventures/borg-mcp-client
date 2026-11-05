@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, realpathSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-vi.mock('../src/opencode-v2-startup.js', () => ({ withOpenCodeV2Startup: (operation: () => Promise<unknown>) => operation() }));
+vi.mock('../src/opencode-v2-startup-host.js', () => ({ withOpenCodeV2StartupHost: (operation: (host: unknown) => Promise<unknown>) => operation({ startServer: state.start }) }));
 const state = vi.hoisted(() => ({
   closeServer: vi.fn(async () => {}), closeBroker: vi.fn(async () => {}),
   call: vi.fn(), start: vi.fn(), prepare: vi.fn(async () => []),
