@@ -23,12 +23,15 @@ async function bounded(promise) {
 }
 if (process.argv[2] === '--worker') {
   const [root, binary, version, directory] = process.argv.slice(3);
+  let stage = 'mutex';
   const start = async () => {
+    stage = 'server';
     const server = await startOpenCodeV2Server({
       installation: { executable: binary, ...parseOpenCodeVersion(version) }, directory,
       env: process.env, readyTimeoutMs: 60_000,
     });
     try {
+      stage = 'configuration';
       const client = OpenCode.make({ baseUrl: server.url, headers: server.headers(),
         fetch: (input, init) => fetch(input, { ...init, redirect: 'error', signal: AbortSignal.timeout(60_000) }) });
       await client.config.get({ location: { directory } });
@@ -43,7 +46,15 @@ if (process.argv[2] === '--worker') {
     server = await (process.env.OPENCODE_TEST_UNGATED === '1' ? start() : withOpenCodeV2Startup(start));
     process.send({ type: 'ready', pid: server.pid });
     await once(process, 'message');
-  } catch { process.send({ type: 'failed' }); process.exitCode = 1; }
+  } catch (error) {
+    // Fixed classifications only: native responses/configuration can contain secrets.
+    const reason = error?.message?.includes('current Windows user') ? 'private-acl'
+      : error?.message?.includes('private regular file') ? 'private-file'
+      : error?.message?.includes('symlink') ? 'canonical-path' : 'other';
+    process.send({ type: 'failed', stage, reason,
+      sqliteCode: Number.isInteger(error?.errcode) ? error.errcode : undefined });
+    process.exitCode = 1;
+  }
   finally { await server?.close(); process.disconnect(); }
 } else {
   const binary = realpathSync(process.env.OPENCODE_TEST_V2_BINARY ?? '');
@@ -80,7 +91,7 @@ if (process.argv[2] === '--worker') {
         child.on('message', message => {
           if (message.type === 'waiting') waitingResolve();
           if (message.type === 'ready') resolve(message.pid);
-          if (message.type === 'failed') reject(new Error('Native worker failed during shared-database startup'));
+          if (message.type === 'failed') reject(new Error(`Native worker failed during shared-database startup (${message.stage}, ${message.reason}, sqlite=${message.sqliteCode ?? 'none'})`));
         });
         child.once('error', error => { waitingReject(error); reject(error); });
         child.once('exit', code => {

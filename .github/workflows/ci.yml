@@ -126,7 +126,7 @@ jobs:
           echo "OPENCODE_TEST_V2_BINARY=$RUNNER_TEMP/opencode/node_modules/@opencode/cli/bin/opencode.exe" >> "$GITHUB_ENV"
       - name: Check descriptors, permissions, leases, and migration
         shell: bash
-        run: npx vitest run __tests__/opencode-v2-broker.test.ts __tests__/opencode-v2-config.test.ts __tests__/opencode-v2-server.test.ts
+        run: npx vitest run __tests__/opencode-v2-broker.test.ts __tests__/opencode-v2-config.test.ts __tests__/opencode-v2-server.test.ts __tests__/opencode-v2-startup.test.ts
       - name: Exercise native Code Mode and direct tools with a local provider
         shell: bash
         run: |
