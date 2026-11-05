@@ -1,9 +1,10 @@
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseDocument } from 'yaml';
 import { borgHomeRoot } from './private-root.js';
 import { findProjectRoot } from './cubes.js';
 import { splitClaudeToolSelectors } from './claude-effective-settings.js';
+import { claudeManagedAgentDirectory } from './claude-managed-policy.js';
 import { assertClaudeHookPoliciesMigrated, assertToolNamePoliciesMigrated, ToolNameMigrationError } from './tool-name-migration.js';
 
 type RecordValue = Record<string, unknown>;
@@ -20,7 +21,7 @@ export function inspectClaudePolicySources(args: readonly string[], cwd: string,
   const plugins: string[] = [];
   const inlineAgents: unknown[] = [];
   const seen = new Set<string>();
-  let totalBytes = 0, files = 0;
+  let totalBytes = 0, files = 0, discoveredEntries = 0;
   const read = (path: string): string | undefined => {
     let info;
     try { info = statSync(path); }
@@ -47,8 +48,8 @@ export function inspectClaudePolicySources(args: readonly string[], cwd: string,
     assertToolNamePoliciesMigrated('claude', policies);
     assertClaudeHookPoliciesMigrated({ hooks: value.hooks });
   };
-  const frontmatter = (path: string) => {
-    const source = read(path)?.replace(/^\uFEFF/, '');
+  const inspectMarkdown = (text: string | undefined) => {
+    const source = text?.replace(/^\uFEFF/, '');
     if (!source || !/^---[ \t]*\r?\n/.test(source)) return;
     const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(source);
     if (!match) throw fail();
@@ -58,23 +59,36 @@ export function inspectClaudePolicySources(args: readonly string[], cwd: string,
     try { value = document.toJS({ maxAliasCount: 100 }); JSON.stringify(value); } catch { throw fail(); }
     if (value !== null) inspect(value);
   };
+  const frontmatter = (path: string) => inspectMarkdown(read(path));
+  const commandPath = (root: string, value: unknown): string => {
+    if (typeof value !== 'string' || !value.startsWith('./')) throw fail();
+    try {
+      const physical = realpathSync(expand(value, root));
+      const local = relative(realpathSync(root), physical);
+      if (local === '..' || local.startsWith(`..${sep}`) || isAbsolute(local)) throw fail();
+      return physical;
+    } catch { throw fail(); }
+  };
   const walk = (path: string, kind: string) => {
     let physical: string;
     try { physical = realpathSync(path); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw fail(); }
     const identity = `${kind}:${physical}`;
-    if (seen.has(identity)) return;
-    seen.add(identity);
     let info;
     try { info = statSync(physical); } catch { throw fail(); }
     if (info.isFile()) {
-      if (kind === 'skills' ? basename(path) === 'SKILL.md' : /\.md$/i.test(path) && basename(path) !== 'README.md') frontmatter(physical);
+      const eligible = kind === 'skills' ? basename(path) === 'SKILL.md'
+        : /\.md$/i.test(path) && (kind === 'agents' || basename(path) !== 'README.md');
+      // An ancillary symlink must not mark its SKILL.md target inspected.
+      if (eligible && !seen.has(identity)) { seen.add(identity); frontmatter(physical); }
       return;
     }
     if (!info.isDirectory()) throw fail();
+    if (seen.has(identity)) return;
+    seen.add(identity);
     let entries: string[];
     try { entries = readdirSync(physical); } catch { throw fail(); }
-    if (seen.size + entries.length > 8192) throw fail();
+    if ((discoveredEntries += entries.length) > 8192) throw fail();
     for (const name of entries) walk(join(physical, name), kind);
   };
   const flagValues = (index: number, inline: string | undefined, variadic: boolean): { values: string[]; index: number } => {
@@ -119,6 +133,9 @@ export function inspectClaudePolicySources(args: readonly string[], cwd: string,
   }
   for (const path of additional) roots.add(join(path, '.claude'));
   for (const root of roots) for (const kind of ['agents', 'skills', 'commands']) walk(join(root, kind), kind);
+  // Bare get_settings omits file-based agents, including the highest-priority
+  // managed definitions outside the user's configurable Claude directory.
+  walk(claudeManagedAgentDirectory(), 'agents');
 
   // Only enabled installed plugins can contribute auto-discovered definitions.
   const effective = record(settings) && record(settings.effective) ? settings.effective : {};
@@ -139,11 +156,38 @@ export function inspectClaudePolicySources(args: readonly string[], cwd: string,
     const manifest = json(join(root, '.claude-plugin', 'plugin.json'));
     if (manifest !== undefined && !record(manifest)) throw fail();
     for (const kind of ['agents', 'skills', 'commands']) {
-      walk(join(root, kind), kind);
       const extra = record(manifest) ? manifest[kind] : undefined;
+      // Explicit command/agent declarations replace the default scan; skills
+      // are additive. Do not inspect ignored defaults as active policies.
+      if (extra === undefined || kind === 'skills') walk(join(root, kind), kind);
       if (extra === undefined) continue;
+      if (kind === 'commands' && record(extra)) {
+        for (const command of Object.values(extra)) {
+          if (!record(command) || Object.hasOwn(command, 'source') === Object.hasOwn(command, 'content')) throw fail();
+          if (command.allowedTools !== undefined && (!Array.isArray(command.allowedTools) ||
+            !command.allowedTools.every(tool => typeof tool === 'string'))) throw fail();
+          inspect({ allowedTools: command.allowedTools });
+          if (Object.hasOwn(command, 'source')) {
+            const source = read(commandPath(root, command.source));
+            if (source === undefined) throw fail();
+            inspectMarkdown(source);
+          } else {
+            if (typeof command.content !== 'string') throw fail();
+            inspectMarkdown(command.content);
+          }
+        }
+        continue;
+      }
       const paths = Array.isArray(extra) ? extra : [extra];
-      for (const path of paths) { if (typeof path !== 'string') throw fail(); walk(expand(path, root), kind); }
+      for (const path of paths) {
+        if (typeof path !== 'string') throw fail();
+        if (kind !== 'commands') { walk(expand(path, root), kind); continue; }
+        const source = commandPath(root, path);
+        let info;
+        try { info = statSync(source); } catch { throw fail(); }
+        if (info.isFile()) frontmatter(source);
+        else walk(source, kind);
+      }
     }
     const hooks = json(join(root, 'hooks', 'hooks.json'));
     if (hooks !== undefined) assertClaudeHookPoliciesMigrated({ hooks });

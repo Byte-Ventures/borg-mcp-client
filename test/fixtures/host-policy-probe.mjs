@@ -1,12 +1,13 @@
 // Explicit native regression: no initialize, user prompt or model generation.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultApprovalIo, readCodexEffectiveConfig, resolveLaunchBorgApprovals } from '../../dist/cli-tool-approval.js';
 import { readClaudeEffectiveSettings } from '../../dist/claude-effective-settings.js';
 import { ToolNameMigrationError } from '../../dist/tool-name-migration.js';
+import { claudeManagedAgentDirectory } from '../../dist/claude-managed-policy.js';
 
 const claudeBinary = process.env.CLAUDE_TEST_BINARY;
 const codexBinary = process.env.CODEX_TEST_BINARY;
@@ -46,6 +47,10 @@ try {
     await launch(['--settings', JSON.stringify({ hooks })]);
     writeFileSync(settingsPath, JSON.stringify({ ...base, hooks: { ...hooks, PreToolUse: [{ matcher: oldName, hooks: [handler] }] } }));
     await assert.rejects(launch([]), ToolNameMigrationError);
+    writeFileSync(settingsPath, JSON.stringify({ ...base, hooks: { ...hooks, PreToolUse: [{ matcher: `Bash, ${oldName}`, hooks: [handler] }] } }));
+    await assert.rejects(launch([]), ToolNameMigrationError);
+    writeFileSync(settingsPath, JSON.stringify({ ...base, hooks: { ...hooks, PreToolUse: [{ matcher: `Bash, ${oldName} | ${newName}`, hooks: [handler] }] } }));
+    await launch([]);
     writeFileSync(settingsPath, JSON.stringify(base));
     mkdirSync(join(config, 'agents'));
     const agent = join(config, 'agents', 'safety.md');
@@ -55,8 +60,43 @@ try {
     await launch(['--agent', 'safety']);
     await assert.rejects(launch(['--agents', JSON.stringify({ safety: { description: 'Fixture', prompt: 'Fixture', disallowedTools: [oldName] } })]), ToolNameMigrationError);
     await assert.rejects(launch(['--allowedTools', newName, '--disallowedTools', oldName, 'mcp__borg__borg_tool']), ToolNameMigrationError);
+
+    const plugin = join(root, 'plugin'); mkdirSync(join(plugin, '.claude-plugin'), { recursive: true });
+    mkdirSync(join(plugin, 'commands')); mkdirSync(join(plugin, 'custom'));
+    const source = join(plugin, 'custom', 'status.md');
+    writeFileSync(source, `---\nallowed-tools: [${oldName}, ${newName}]\n---\nFixture command.`);
+    // The manifest replaces commands/, so this obsolete policy must not block.
+    writeFileSync(join(plugin, 'commands', 'ignored.md'), `---\nallowed-tools: ${oldName}\n---\nIgnored command.`);
+    const manifest = join(plugin, '.claude-plugin', 'plugin.json');
+    const commands = { status: { source: './custom/status.md', allowedTools: [oldName, newName] }, about: { content: 'Explain the local fixture.' } };
+    writeFileSync(manifest, JSON.stringify({ name: 'borg-native-fixture', commands }));
+    const validation = spawnSync(claudeBinary, ['--bare', 'plugin', 'validate', plugin], { cwd: root, env, encoding: 'utf8', timeout: 15_000 });
+    assert.equal(validation.status, 0, 'Installed Claude accepts the command-map fixture');
+    await launch(['--plugin-dir', plugin]);
+    writeFileSync(manifest, JSON.stringify({ name: 'borg-native-fixture', commands: { about: { content: 'Fixture', allowedTools: [oldName] } } }));
+    await assert.rejects(launch(['--plugin-dir', plugin]), ToolNameMigrationError);
+    writeFileSync(manifest, JSON.stringify({ name: 'borg-native-fixture', commands }));
+    writeFileSync(source, `---\nallowed-tools: ${oldName}\n---\nFixture command.`);
+    await assert.rejects(launch(['--plugin-dir', plugin]), ToolNameMigrationError);
+
+    if (process.env.CLAUDE_TEST_MANAGED === '1') {
+      // Only an explicitly opted-in disposable Linux container may write a
+      // real managed location; never redirect/modify the operator's policy.
+      assert.ok(process.env.CI === 'true' && process.env.BORG_E2E === '1' && process.platform === 'linux' && existsSync('/.dockerenv'));
+      const directory = claudeManagedAgentDirectory(); mkdirSync(directory, { recursive: true });
+      const managed = join(directory, 'borg-native-fixture.md');
+      writeFileSync(managed, `---\nname: borg-native-fixture\ndescription: Managed fixture\ndisallowedTools: ${oldName}\n---\nFixture.`, { flag: 'wx' });
+      try {
+        await assert.rejects(launch(['--agent', 'borg-native-fixture']), ToolNameMigrationError);
+        writeFileSync(managed, `---\nname: borg-native-fixture\ndescription: Managed fixture\ndisallowedTools: [${oldName}, ${newName}]\n---\nFixture.`);
+        await launch(['--agent', 'borg-native-fixture']);
+        writeFileSync(managed, `---\nname: borg-native-fixture\ndescription: Managed fixture\nhooks: ${JSON.stringify({ PreToolUse: [{ matcher: `Bash, ${oldName}`, hooks: [handler] }] })}\n---\nFixture.`);
+        await assert.rejects(launch(['--agent', 'borg-native-fixture']), ToolNameMigrationError);
+        console.log('Claude managed agents: production system directory checked; asymmetric restriction/hook refused, paired restriction accepted.');
+      } finally { rmSync(managed); }
+    }
     assert.equal(existsSync(marker), false);
-    console.log('Claude: native settings preserved; hooks never executed; hook, agent and CLI mismatches refused.');
+    console.log('Claude: native settings preserved; hooks never executed; exact-list hooks, agents, CLI and command-map policies checked.');
   }
   if (codexBinary) {
     mkdirSync(env.CODEX_HOME);

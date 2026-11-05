@@ -1,10 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { inspectClaudePolicySources } from '../src/claude-policy-sources.js';
 import { ToolNameMigrationError, assertClaudeHookPoliciesMigrated, assertToolNamePoliciesMigrated } from '../src/tool-name-migration.js';
 import { claudeToolPolicyArgs } from '../src/claude-effective-settings.js';
+import { LEGACY_TOOL_ALIASES } from '../src/tool-names.js';
+
+const managed = vi.hoisted(() => ({ directory: '' }));
+vi.mock('../src/claude-managed-policy.js', () => ({ claudeManagedAgentDirectory: () => managed.directory }));
 
 const oldName = 'mcp__borg__borg_remove-document';
 const newName = 'mcp__borg__borg_remove_document';
@@ -16,11 +20,33 @@ const inspect = (args: string[] = [], settings: unknown = { effective: {} }) => 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-claude-policies-')));
   cwd = join(root, 'repo', 'src'); config = join(root, 'user-config');
+  managed.directory = join(root, 'managed', '.claude', 'agents');
   mkdirSync(cwd, { recursive: true }); mkdirSync(join(root, 'repo', '.git'));
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('Claude hook migration', () => {
+  it.each(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied'])(
+    'checks comma/pipe exact lists against every alias in %s', event => {
+      for (const [legacy, canonical] of Object.entries(LEGACY_TOOL_ALIASES)) {
+        const old = `mcp__borg__${legacy}`, current = `mcp__borg__${canonical}`;
+        const check = (matcher: string) => assertClaudeHookPoliciesMigrated({ hooks: { [event]: [{ matcher,
+          hooks: [{ type: 'command', command: 'exit 2' }] }] } });
+        for (const separator of [',', ', ', '|', ' | ', ', Bash | ']) {
+          expect(() => check(`Bash${separator}${old}`)).toThrow(ToolNameMigrationError);
+          expect(() => check(`Bash${separator}${current}`)).toThrow(ToolNameMigrationError);
+          expect(() => check(`Bash${separator}${old}${separator}${current}`)).not.toThrow();
+        }
+      }
+    });
+  it('uses exact comparison for simple names and regex comparison for other matchers', () => {
+    const check = (matcher?: string) => assertClaudeHookPoliciesMigrated({ hooks: { PreToolUse: [{ matcher, hooks: [] }] } });
+    for (const matcher of [undefined, '', '*', 'mcp__borg__borg_remove', 'Bash, Write', `^(${oldName}|${newName})$`]) {
+      expect(() => check(matcher)).not.toThrow();
+    }
+    expect(() => check('mcp__borg__.*remove-document')).toThrow(ToolNameMigrationError);
+    expect(() => check(`^${oldName},Bash$`)).not.toThrow(); // A regex containing a literal comma matches neither tool.
+  });
   it.each(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied'])(
     'refuses an asymmetric %s matcher even when another hook covers the other spelling', event => {
       const hooks = { [event]: [
@@ -60,6 +86,35 @@ describe('Claude CLI policy effects', () => {
 });
 
 describe('Claude definition source inspection', () => {
+  it('checks managed agents even when user/project agents with the same name are migrated', () => {
+    write(join(config, 'agents', 'safety.md'), definition(`disallowedTools: [${oldName}, ${newName}]`));
+    write(join(root, 'repo', '.claude', 'agents', 'safety.md'), definition(`disallowedTools: [${oldName}, ${newName}]`));
+    const agent = join(managed.directory, 'nested', 'safety.md');
+    expect(() => inspect()).not.toThrow();
+    write(agent, definition(`disallowedTools: ${oldName}`));
+    expect(() => inspect()).toThrow(ToolNameMigrationError);
+    write(agent, definition(`disallowedTools: [${oldName}, ${newName}]`));
+    expect(() => inspect()).not.toThrow();
+  });
+  it('checks managed agent hooks and refuses malformed managed definitions', () => {
+    const agent = join(managed.directory, 'safety.md');
+    write(agent, definition(`hooks:\n  PreToolUse:\n    - matcher: Bash, ${oldName}\n      hooks:\n        - type: command\n          command: exit 2`));
+    expect(() => inspect()).toThrow(ToolNameMigrationError);
+    write(agent, definition('tools: [invalid'));
+    expect(() => inspect()).toThrow(ToolNameMigrationError);
+  });
+  it('inspects a managed definition named README.md', () => {
+    write(join(managed.directory, 'README.md'), definition(`disallowedTools: ${oldName}`));
+    expect(() => inspect()).toThrow(ToolNameMigrationError);
+  });
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses an unreadable managed agent without exposing its path/content', () => {
+    const agent = join(managed.directory, 'private-agent.md');
+    write(agent, definition(`disallowedTools: ${oldName}`)); chmodSync(agent, 0o000);
+    try {
+      expect(() => inspect()).toThrow(ToolNameMigrationError);
+      expect(() => inspect()).not.toThrow(agent);
+    } finally { chmodSync(agent, 0o600); }
+  });
   it.each(['agents', 'commands'])( 'checks nested project %s definitions instead of relying on get_settings', kind => {
     write(join(root, 'repo', '.claude', kind, 'nested', 'safety.md'), definition(`disallowedTools: ${oldName}`));
     expect(() => inspect(['--agent', 'safety'])).toThrow(ToolNameMigrationError);
@@ -104,6 +159,12 @@ describe('Claude definition source inspection', () => {
     write(join(agents, 'safety.md'), definition(`disallowedTools: ${oldName}`));
     expect(() => inspect()).toThrow(ToolNameMigrationError);
   });
+  it('does not let an ancillary symlink hide a skill entrypoint', () => {
+    const skill = join(config, 'skills', 'safety');
+    write(join(skill, 'SKILL.md'), definition(`allowed-tools: ${oldName}`));
+    symlinkSync(join(skill, 'SKILL.md'), join(skill, 'README.md'));
+    expect(() => inspect()).toThrow(ToolNameMigrationError);
+  });
   it('checks enabled installed and explicit plugin agents and custom hook files', () => {
     const plugin = join(root, 'plugin');
     write(join(config, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: {
@@ -116,6 +177,77 @@ describe('Claude definition source inspection', () => {
     expect(() => inspect(['--plugin-dir', plugin])).toThrow(ToolNameMigrationError);
     write(join(plugin, 'custom', 'hooks.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: '^mcp__borg__borg_remove[-_]document$', hooks: [] }] } }));
     expect(() => inspect(['--plugin-dir', plugin])).not.toThrow();
+  });
+  it('accepts command maps with source/content and inspects their declared tool policies', () => {
+    const plugin = join(root, 'plugin');
+    const manifest = join(plugin, '.claude-plugin', 'plugin.json');
+    const source = join(plugin, 'custom', 'status.md');
+    write(source, definition(`allowed-tools: [${oldName}, ${newName}]`));
+    const commands = { status: { source: './custom/status.md', allowedTools: [oldName, newName] },
+      about: { content: `Explain ${oldName} in prose.\n! touch must-not-run` } };
+    write(manifest, JSON.stringify({ name: 'fixture', commands }));
+    expect(() => inspect(['--plugin-dir', plugin])).not.toThrow();
+    write(manifest, JSON.stringify({ name: 'fixture', commands: { status: { ...commands.status, allowedTools: [oldName] } } }));
+    expect(() => inspect(['--plugin-dir', plugin])).toThrow(ToolNameMigrationError);
+    write(manifest, JSON.stringify({ name: 'fixture', commands }));
+    write(source, definition(`allowed-tools: ${oldName}`));
+    expect(() => inspect(['--plugin-dir', plugin])).toThrow(ToolNameMigrationError);
+    write(manifest, JSON.stringify({ name: 'fixture', commands: { about: { content: definition(`allowed-tools: ${oldName}`) } } }));
+    expect(() => inspect(['--plugin-dir', plugin])).toThrow(ToolNameMigrationError);
+  });
+  it('does not pair policies between separate commands', () => {
+    const plugin = join(root, 'plugin');
+    write(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'fixture', commands: {
+      old: { content: 'First command', allowedTools: [oldName] }, current: { content: 'Second command', allowedTools: [newName] },
+    } }));
+    expect(() => inspect(['--plugin-dir', plugin])).toThrow(ToolNameMigrationError);
+  });
+  it.each([
+    './custom/status.md', ['./custom/status.md'], { status: { source: './custom/status.md' } }, { about: { content: 'Valid command.' } }, {},
+  ])('explicit commands replace the ignored default directory: %j', commands => {
+    const plugin = join(root, 'plugin');
+    write(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'fixture', commands }));
+    write(join(plugin, 'custom', 'status.md'), definition(`allowed-tools: [${oldName}, ${newName}]`));
+    write(join(plugin, 'commands', 'ignored.md'), definition(`allowed-tools: ${oldName}`));
+    expect(() => inspect(['--plugin-dir', plugin])).not.toThrow();
+  });
+  it('still checks default commands when no replacement is declared', () => {
+    const plugin = join(root, 'plugin');
+    write(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'fixture' }));
+    write(join(plugin, 'commands', 'status.md'), definition(`allowed-tools: ${oldName}`));
+    expect(() => inspect(['--plugin-dir', plugin])).toThrow(ToolNameMigrationError);
+  });
+  it.each([
+    null, 'plain string', {}, { source: './missing.md' }, { content: 'body', source: './missing.md' },
+    { content: null }, { source: 3 }, { source: '../outside.md' }, { source: '/absolute.md' },
+    { content: 'body', allowedTools: 3 }, { content: 'body', allowedTools: [oldName, 3] },
+  ])('refuses malformed or unavailable command-map entries: %j', entry => {
+    const plugin = join(root, 'plugin');
+    write(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'fixture', commands: { status: entry } }));
+    expect(() => inspect(['--plugin-dir', plugin])).toThrow(ToolNameMigrationError);
+  });
+  it('refuses command sources that escape the plugin through symlinks', () => {
+    const plugin = join(root, 'plugin'), outside = join(root, 'outside.md');
+    write(outside, 'Plain command body.');
+    write(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'fixture', commands: { status: { source: './linked.md' } } }));
+    symlinkSync(outside, join(plugin, 'linked.md'));
+    expect(() => inspect(['--plugin-dir', plugin])).toThrow(ToolNameMigrationError);
+  });
+  it.each(['./custom/README.md', { status: { source: './custom/README.md' } }])('inspects explicitly selected README command sources: %j', commands => {
+    const plugin = join(root, 'plugin');
+    write(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'fixture', commands }));
+    write(join(plugin, 'custom', 'README.md'), definition(`allowed-tools: ${oldName}`));
+    expect(() => inspect(['--plugin-dir', plugin])).toThrow(ToolNameMigrationError);
+  });
+  it('checks explicit command directories and does not scan replaced agents', () => {
+    const plugin = join(root, 'plugin');
+    write(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'fixture', commands: ['./extra/'], agents: ['./custom/safety.md'] }));
+    write(join(plugin, 'agents', 'ignored.md'), definition(`disallowedTools: ${oldName}`));
+    write(join(plugin, 'custom', 'safety.md'), definition(`disallowedTools: [${oldName}, ${newName}]`));
+    write(join(plugin, 'extra', 'status.md'), definition(`allowed-tools: [${oldName}, ${newName}]`));
+    expect(() => inspect(['--plugin-dir', plugin])).not.toThrow();
+    write(join(plugin, 'extra', 'status.md'), definition(`allowed-tools: ${oldName}`));
+    expect(() => inspect(['--plugin-dir', plugin])).toThrow(ToolNameMigrationError);
   });
   it('fails closed for unavailable plugin metadata and remote-only plugins', () => {
     expect(() => inspect([], { effective: { enabledPlugins: { 'missing@fixture': true } } })).toThrow(ToolNameMigrationError);

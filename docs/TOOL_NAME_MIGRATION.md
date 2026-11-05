@@ -42,7 +42,15 @@ including per-source managed settings. The inspection runs in bare mode so it
 does not execute startup/shutdown hooks or activate plugins. A CLI without the
 required native inspection capabilities is refused. Agent, skill and command
 frontmatter, inline `--agents` definitions, and enabled/local plugin definitions
-are read as data using their configured locations. Unavailable or malformed
+are read as data using their configured locations. Managed agents are also read
+from `.claude/agents` beneath Claude's system directory: `/Library/Application Support/ClaudeCode`
+on macOS, `/etc/claude-code` on Linux/WSL, and `C:\Program Files\ClaudeCode` on Windows.
+Changing `HOME` or `CLAUDE_CONFIG_DIR` does not redirect that managed scan.
+Plugin command maps support `source` and `content` entries and their `allowedTools`
+selectors; referenced and inline frontmatter are inspected without executing
+commands. Explicit plugin command/agent declarations replace their default
+directory scans; skill declarations add to the default directory.
+Unavailable or malformed
 definitions stop launch; remote-only plugins must be installed locally first.
 Codex uses its native effective configuration and selected profile. OpenCode 1
 uses its effective config, and OpenCode 2 checks native config sources, effective
@@ -55,9 +63,12 @@ Unavailable effective configuration also stops launch. The approval opt-out flag
 these settings or automatically translate policy globs. Its own launch-only
 approval additions cover canonical and legacy spellings equally.
 
-Claude tool hook matchers are regular expressions. Each matcher must cover both
-spellings, for example `^mcp__borg__borg_remove[-_]document$`; two separate hooks
-are not treated as equivalent. Preserve the existing handler. Also review hook
+Claude tool hook matchers support exact names separated by commas or pipes,
+match-all values (`*`, empty or omitted), and unanchored regular expressions.
+Each matcher must cover both spellings, for example
+`mcp__borg__borg_remove-document,mcp__borg__borg_remove_document` or
+`^mcp__borg__borg_remove[-_]document$`; two separate hooks are not treated as
+equivalent. Preserve the existing handler. Also review hook
 scripts that inspect tool names internally: Borg checks declared matchers and
 tool conditions, and cannot prove the behavior of arbitrary handler code.
 

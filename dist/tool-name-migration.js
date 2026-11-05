@@ -8,8 +8,8 @@ export class ToolNameMigrationError extends Error {
 const CLAUDE_TOOL_HOOK_EVENTS = new Set([
     'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied',
 ]);
-/** Claude hook matchers are regular expressions, not permission globs. Inspect
- * each hook independently: two different hooks cannot prove equivalent effects. */
+/** Claude's simple matchers are exact-name lists; other non-wildcard matchers
+ * are unanchored regexes. Separate hooks cannot prove equivalent effects. */
 export function assertClaudeHookPoliciesMigrated(config) {
     const inspectHooks = (hooks) => {
         if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks))
@@ -24,15 +24,22 @@ export function assertClaudeHookPoliciesMigrated(config) {
                 if (matcher !== undefined && matcher !== '' && matcher !== '*') {
                     if (typeof matcher !== 'string')
                         throw new ToolNameMigrationError('claude', 'a tool hook matcher could not be inspected.');
-                    let expression;
+                    let matchesTool;
                     try {
-                        expression = new RegExp(matcher);
+                        if (/^[a-zA-Z0-9_\- ,|]+$/.test(matcher)) {
+                            const names = new Set(matcher.split(/[|,]/).map(name => name.trim()));
+                            matchesTool = name => names.has(name);
+                        }
+                        else {
+                            const expression = new RegExp(matcher);
+                            matchesTool = name => expression.test(name);
+                        }
                     }
                     catch {
                         throw new ToolNameMigrationError('claude', 'a tool hook matcher is not a valid regular expression.');
                     }
                     for (const [legacy, canonical] of Object.entries(LEGACY_TOOL_ALIASES)) {
-                        if (expression.test(`mcp__borg__${legacy}`) !== expression.test(`mcp__borg__${canonical}`)) {
+                        if (matchesTool(`mcp__borg__${legacy}`) !== matchesTool(`mcp__borg__${canonical}`)) {
                             throw new ToolNameMigrationError('claude', 'a tool hook matcher treats canonical and legacy names differently; update that matcher without changing its handler.');
                         }
                     }

@@ -1,0 +1,1 @@
+{"version":3,"file":"claude-managed-policy.js","sourceRoot":"","sources":["../src/claude-managed-policy.ts"],"names":[],"mappings":"AAAA;;;sDAGsD;AACtD,MAAM,UAAU,2BAA2B,CAAC,WAA4B,OAAO,CAAC,QAAQ;IACtF,IAAI,QAAQ,KAAK,QAAQ;QAAE,OAAO,wDAAwD,CAAC;IAC3F,IAAI,QAAQ,KAAK,OAAO;QAAE,OAAO,gDAAgD,CAAC;IAClF,OAAO,iCAAiC,CAAC;AAC3C,CAAC"}
