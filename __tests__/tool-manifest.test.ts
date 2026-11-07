@@ -123,11 +123,17 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
 
     const log = TOOL_MANIFEST.find((entry) => entry.name === 'borg_log');
     expect(log?.inputSchema.required).toEqual(['message', 'to']);
-    expect(log?.inputSchema.properties.to).toEqual({
-      description:
-        'Required explicit audience: "broadcast" for every drone, or a non-empty array of exact drone labels, drone ids, stable 8-hex `id:` tokens, role names, or role slugs.',
-    });
-    expect(log?.description).toContain('Every call must pass `to: "broadcast"`');
+    // Keep the property flat: the supported string-normalizing hosts cannot
+    // represent this string/array alternative uniformly. Runtime validates it.
+    expect(log?.inputSchema.properties.to.type).toBeUndefined();
+    expect(JSON.stringify(log?.inputSchema.properties.to)).not.toMatch(/oneOf|anyOf|allOf/);
+    for (const description of [log?.description, log?.inputSchema.properties.to.description]) {
+      expect(description).toContain('{"to":"broadcast"}');
+      expect(description).toContain('{"to":["Build"]}');
+      expect(description).toContain('{"to":["Build","Review"]}');
+      expect(description).toContain('even for one recipient');
+      expect(description).toContain('Invalid: {"to":"Build"}, {"to":[]}, or omitted `to`');
+    }
     expect(log?.description).toContain('not read confidentiality');
     expect(log?.description).toContain('taxonomy classes never choose the audience');
     expect(log?.inputSchema.properties).not.toHaveProperty('visibility');

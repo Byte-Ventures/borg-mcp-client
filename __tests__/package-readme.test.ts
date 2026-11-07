@@ -113,7 +113,6 @@ describe('published package artifact', () => {
       expect(packedReadme).toContain('`"broadcast"`');
       expect(packedReadme).toContain('non-empty selector array');
       expect(packedReadme).toContain('not read confidentiality');
-      expect(packedReadme).toContain('Omission,');
       const packedLogSchema = packedToolManifest.slice(
         packedToolManifest.indexOf("name: 'borg_log'"),
         packedToolManifest.indexOf("name: 'borg_list_cubes'"),

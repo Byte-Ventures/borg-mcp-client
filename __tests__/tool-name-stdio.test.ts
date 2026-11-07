@@ -14,13 +14,27 @@ it('accepts hidden aliases over real MCP stdio while advertising only canonical 
       XDG_CONFIG_HOME: join(root, '.config') }, stderr: 'pipe' });
   try {
     await client.connect(transport);
-    const names = (await client.listTools()).tools.map(tool => tool.name);
+    const tools = (await client.listTools()).tools;
+    const names = tools.map(tool => tool.name);
     expect(names).toContain('borg_read_log');
     expect(names.every(name => !name.includes('-'))).toBe(true);
     const canonical = await client.callTool({ name: 'borg_describe_tool', arguments: { name: 'borg_read_log' } });
     const alias = await client.callTool({ name: 'borg_describe-tool', arguments: { name: 'borg_read-log' } });
     expect(alias).toEqual(canonical);
     expect((alias.structuredContent as any).name).toBe('borg_read_log');
+    const log = tools.find(tool => tool.name === 'borg_log')!;
+    const described = await client.callTool({ name: 'borg_describe_tool', arguments: { name: 'borg_log' } });
+    expect((described.structuredContent as any).inputSchema).toEqual(log.inputSchema);
+    for (const surface of [log.description, (described.structuredContent as any).description]) {
+      expect(surface).toContain('{"to":"broadcast"}');
+      expect(surface).toContain('{"to":["Build"]}');
+      expect(surface).toContain('even for one recipient');
+    }
+    const invalidLog = { message: 'invalid recipient fixture', to: 'Build' };
+    const refused = await client.callTool({ name: 'borg_log', arguments: invalidLog });
+    expect(refused.isError).toBe(true);
+    expect((refused.content as any)[0].text).toContain('{"to":["Build"]}');
+    expect(await client.callTool({ name: 'borg_tool', arguments: { name: 'borg_log', arguments: invalidLog } })).toEqual(refused);
     const direct = await client.callTool({ name: 'borg_read_log', arguments: { unread_only: true } });
     expect(await client.callTool({ name: 'borg_read-log', arguments: { unread_only: true } })).toEqual(direct);
     expect(await client.callTool({ name: 'borg_tool', arguments: { name: 'borg_read-log', arguments: { unread_only: true } } })).toEqual(direct);

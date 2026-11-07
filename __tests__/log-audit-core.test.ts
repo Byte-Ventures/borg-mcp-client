@@ -13,7 +13,8 @@ describe('evaluateLogAudit', () => {
       { info: { role: 'user' }, parts: [{ type: 'text', text: 'next' }] },
     ]);
     expect(nudge).toBe(LOG_AUDIT_NUDGE(3));
-    expect(nudge).toContain('`to: "broadcast"` or a non-empty selector array');
+    expect(nudge).toContain('{"to":"broadcast"}');
+    expect(nudge).toContain('{"to":["Build"]}');
   });
 
   it('treats an OpenCode borg log call as cooldown', () => {

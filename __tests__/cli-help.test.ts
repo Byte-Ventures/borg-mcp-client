@@ -294,7 +294,8 @@ describe('gh#818 P2 — top-level --help leads with purpose + docs link', () => 
 
   it('explains mandatory explicit log addressing without implying secrecy', () => {
     const t = topLevelHelpText('9.9.9');
-    expect(t).toContain('every log message requires `to: "broadcast"` or a non-empty selector list');
+    expect(t).toContain('every log message requires {"to":"broadcast"}');
+    expect(t).toContain('{"to":["Build"]}');
     expect(t).toContain('no omitted or taxonomy-selected audience');
     expect(t).toContain('not secrecy from other cube members');
   });

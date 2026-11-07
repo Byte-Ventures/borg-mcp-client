@@ -54,6 +54,8 @@ let searched = false;
 let handoffPending = false;
 let handoffIssued = false;
 let discoveredPaths = [];
+let audienceRequested = false;
+let audienceIssued = false;
 const direct = process.env.OPENCODE_TEST_DIRECT === '1';
 const pluginDelayMs = Number(process.env.OPENCODE_TEST_PLUGIN_DELAY_MS ?? 0);
 assert.ok(Number.isInteger(pluginDelayMs) && pluginDelayMs >= 0 && pluginDelayMs < 60_000, 'Invalid fixture plugin delay');
@@ -93,7 +95,7 @@ const provider = createServer(async (req, res) => {
   if (process.env.OPENCODE_TEST_TRACE === '1') console.log(JSON.stringify({ shellPath, result: body.messages.filter(message=>message.role==='tool') }));
   let toolCalls = [];
   const actionIndex = requests.length - (searched ? 1 : 0);
-  if (!searched && system.includes('catalog is partial') && (paths.length < 2 || orientationPaths.some(path => !path) || !shellPath || (realSeat && !logPath))) {
+  if (!searched && system.includes('catalog is partial') && (paths.length < 2 || orientationPaths.some(path => !path) || !shellPath || (!direct && !logPath))) {
     searched = true;
     toolCalls = [{index:0,id:'fixture-search',type:'function',function:{name:'execute',arguments:JSON.stringify({code:'return {borg:search({namespace:"tools.borg",limit:100}),shell:search({query:"shell",limit:100})};'})}}];
   }
@@ -102,6 +104,22 @@ const provider = createServer(async (req, res) => {
   else if (realSeat && logPath && !logged && system.includes('3+ state-changing')) {
     logged = true;
     toolCalls = [{index:0,id:'fixture-log',type:'function',function:{name:'execute',arguments:JSON.stringify({code:`return await ${logPath}({message:'Native OpenCode V2 fixture persisted log',to:'broadcast'});`})}}];
+  }
+  if (audienceRequested && !audienceIssued) {
+    const logTool = body.tools?.find(tool => tool.function?.name === 'borg_borg_log');
+    assert.ok(direct ? logTool : logPath, 'Native host advertises the real audience tool');
+    // Inspect the actual provider-facing definition, not a simulated serializer.
+    const representation = direct ? JSON.stringify(logTool.function) : system + JSON.stringify(body.messages.filter(message => message.role === 'tool'));
+    assert.ok(representation.includes('even for one recipient'), 'Audience explanation survives native serialization');
+    const audiences = ['broadcast', ['Build'], ['Build', 'Review']];
+    audienceIssued = true;
+    toolCalls = direct
+      ? audiences.map((to, index) => ({ index, id: 'audience-' + index, type: 'function', function: {
+          name: logTool.function.name, arguments: JSON.stringify({ message: 'Native audience fixture', to }),
+        } }))
+      : [{ index: 0, id: 'audience-code', type: 'function', function: { name: 'execute', arguments: JSON.stringify({
+          code: `for (const to of ${JSON.stringify(audiences)}) await ${logPath}({message:'Native audience fixture',to}); return 'audience fixture complete';`,
+        }) } }];
   }
   if (handoffPending && !handoffIssued) {
     handoffIssued = true;
@@ -201,6 +219,13 @@ try {
     assert.ok(calls.every(call => call.meta?.['ai.opencode/sessionID'] === descriptor.sessionID));
     assert.ok((await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('3+ state-changing'), 'Nested shell operations counted once each');
     await callOpenCodeV2Broker(descriptor, '/logged', { sessionID: descriptor.sessionID });
+    audienceRequested = true;
+    await callOpenCodeV2Broker(descriptor, '/wake', { key: 'audience-fixture', text: 'Exercise explicit audiences', source: 'audience-fixture' });
+    await nativeClient.session.wait({ sessionID: descriptor.sessionID });
+    const audienceCalls = readFileSync(callsPath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(call => call.name === 'borg_log');
+    assert.deepEqual(audienceCalls.map(call => call.audience), ['broadcast', ['Build'], ['Build', 'Review']],
+      'Broadcast, single and multiple direct recipients survive native Code Mode/direct delivery');
+    console.log(JSON.stringify({ audienceRepresentation: direct ? 'native-direct' : 'native-codemode', audiences: audienceCalls.map(call => call.audience) }));
   } else {
     if (!logged) {
       assert.ok((await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('3+ state-changing'),

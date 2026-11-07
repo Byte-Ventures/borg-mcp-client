@@ -308,7 +308,7 @@ describe('getDronePlaybook', () => {
     const playbook = getDronePlaybook();
     // Structured to rule — a waited-on recipient must be WOKEN, not left unaware.
     expect(playbook).toContain('Every `borg_log` call must choose its audience');
-    expect(playbook).toContain('to: "broadcast"');
+    expect(playbook).toContain('{"to":"broadcast"}');
     expect(playbook).toContain('non-empty selector array');
     // gh#675 — multi-seat deliverables widen through structured routing.
     expect(playbook).toContain('multi-seat DELIVERABLE');
@@ -777,7 +777,7 @@ describe('DRONE_PLAYBOOK core/chapter split (gh#912)', () => {
     expect(core).toContain('ARRIVAL:');
     expect(core).toContain('borg_ack');
     expect(core).toContain('availability signal'); // gh#921: de-templated from the literal `READY:` to generic anti-passive phrasing
-    expect(core).toContain('to: "broadcast"');
+    expect(core).toContain('{"to":"broadcast"}');
     expect(core).toContain('non-empty selector array');
     expect(core).toContain('multi-seat DELIVERABLE');
     expect(core).toContain('NOT read-confidentiality');

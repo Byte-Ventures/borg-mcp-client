@@ -35,6 +35,12 @@ describe('borg_log explicit audience', () => {
     const audience = ['builder-1'];
     expect(normalizeLogAudience(audience)).not.toBe(audience);
   });
+
+  it('shows a corrected direct call for a mistaken string recipient', () => {
+    expect(() => normalizeLogAudience('Build')).toThrow('{"to":["Build"]}');
+    expect(() => normalizeLogAudience('Build')).toThrow('even one recipient needs an array');
+    expect(() => normalizeLogAudience('"broadcast"')).toThrow('For broadcast use {"to":"broadcast"}');
+  });
 });
 
 // gh#491: hosts normalize the manifest's type-less `to` property (kept
