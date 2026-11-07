@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, realpathSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+vi.mock('../src/opencode-v2-startup-host.js', () => ({ withOpenCodeV2StartupHost: (operation: (host: unknown) => Promise<unknown>) => operation({ startServer: state.start }) }));
 const state = vi.hoisted(() => ({
   closeServer: vi.fn(async () => {}), closeBroker: vi.fn(async () => {}),
   call: vi.fn(), start: vi.fn(), prepare: vi.fn(async () => []),
@@ -10,7 +11,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock('../src/opencode-launch-plugin.js', () => ({ migrateLegacyOpenCodePlugin: vi.fn(), installLaunchOpenCodePlugin: () => ({ directory: join(process.env.BORG_STATE_ROOT!, 'plugin') }) }));
 vi.mock('../src/opencode-installation.js', async importOriginal => ({ ...await importOriginal<typeof import('../src/opencode-installation.js')>(), verifyOpenCodeExecutableStillMatches: vi.fn() }));
-vi.mock('../src/opencode-v2-server.js', () => ({ startOpenCodeV2Server: state.start }));
+vi.mock('../src/opencode-v2-server.js', async importOriginal => ({ ...await importOriginal<typeof import('../src/opencode-v2-server.js')>(), startOpenCodeV2Server: state.start }));
 vi.mock('../src/opencode-v2-transport.js', () => ({ createOpenCodeV2Transport: async (_server, options) => {
   state.startupSignal = options.startupSignal;
   return { client: {

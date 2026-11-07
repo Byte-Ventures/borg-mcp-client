@@ -1,5 +1,10 @@
 import { spawn } from 'node:child_process';
 import { type OpenCodeInstallation } from './opencode-installation.js';
+/** Fixed, credential-free diagnostics that the launcher may safely preserve. */
+export declare class OpenCodeV2ServerStartError extends Error {
+    readonly reason: 'timeout' | 'exited' | 'verification';
+    constructor(reason: 'timeout' | 'exited' | 'verification');
+}
 export interface OpenCodeV2Server {
     readonly url: string;
     readonly pid: number | undefined;
@@ -21,6 +26,8 @@ export interface StartOpenCodeV2ServerOptions {
     shutdownTimeoutMs?: number;
     spawnProcess?: typeof spawn;
     fetch?: typeof fetch;
+    /** Supervisor cancellation while the native process is still booting. */
+    signal?: AbortSignal;
 }
 /** Validate readiness before sending a credential to any reported endpoint. */
 export declare function validateOpenCodeV2Endpoint(input: unknown): string;
