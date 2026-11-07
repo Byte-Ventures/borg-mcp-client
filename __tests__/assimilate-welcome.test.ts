@@ -2,6 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { renderAssimilationWelcome } from '../src/assimilate-welcome';
 
 describe('renderAssimilationWelcome — structural shape', () => {
+  it('flags automatic selection without claiming explicit or resumed roles were auto-picked', () => {
+    const automatic = renderAssimilationWelcome('builder-1', 'Builder', 'my-project', false, undefined, true);
+    expect(automatic).toContain('Role `Builder` was auto-picked (no role supplied).');
+    expect(automatic).toContain('borg assimilate "<role>"');
+    expect(renderAssimilationWelcome('builder-1', 'Builder', 'my-project', false)).not.toContain('auto-picked');
+  });
   it('includes role name and cube name verbatim', () => {
     const out = renderAssimilationWelcome('one-of-one-coordinator', 'coordinator', 'my-project', false);
     expect(out).toContain('coordinator');
