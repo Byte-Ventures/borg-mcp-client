@@ -223,6 +223,7 @@ export function topLevelHelpText(version) {
         `type \`borg_...\` inside your agent session once you've joined a cube ("assimilate").\n` +
         `Inside a cube, every log message requires {"to":"broadcast"} for all drones\n` +
         `or {"to":["Build"]} for direct delivery; even one recipient requires an array.\n` +
+        `Build is an example role name; use an existing selector from your cube.\n` +
         `There is no omitted or taxonomy-selected audience.\n` +
         `Direct routing controls delivery and wakes, not secrecy from other cube members.\n\n` +
         `Usage:\n` +

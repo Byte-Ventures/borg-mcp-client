@@ -18,11 +18,11 @@ export function normalizeLogAudience(rawValue) {
     if (rawValue === 'broadcast')
         return rawValue;
     const value = typeof rawValue === 'string' ? decodeSerializedAudience(rawValue) : rawValue;
-    const example = typeof value === 'string' && value.trim() && Buffer.byteLength(value, 'utf8') <= 120 && !/[\u0000-\u001f\u007f-\u009f]/.test(value)
-        ? value.trim() : 'Build';
+    const example = typeof value === 'string' && value.trim() && !value.trim().startsWith('[') && Buffer.byteLength(value, 'utf8') <= 120 && !/[\u0000-\u001f\u007f-\u009f]/.test(value)
+        ? value.trim() : '<existing-selector>';
     const correction = rawValue === '"broadcast"'
         ? 'For broadcast use {"to":"broadcast"}, without extra quotes or an array.'
-        : `For direct delivery use ${JSON.stringify({ to: [example] })}; even one recipient needs an array. For all drones use {"to":"broadcast"}.`;
+        : `Direct-delivery example: ${JSON.stringify({ to: [example] })}; use existing selectors from your cube, not a replacement destination. Even one recipient needs an array. For all drones use {"to":"broadcast"}.`;
     const invalid = (message) => new Error(`${message}. ${correction}`);
     if (!Array.isArray(value) || value.length === 0 || value.length > 100) {
         throw invalid('to is required and must be "broadcast" or contain 1-100 recipient selectors');

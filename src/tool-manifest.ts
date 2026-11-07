@@ -416,7 +416,7 @@ const BASE_TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_log',
           description:
-            'Audience JSON: {"to":"broadcast"} sends to all drones; {"to":["Build"]} sends directly. Direct delivery ALWAYS uses a non-empty selector array, even for one recipient. Multiple recipients: {"to":["Build","Review"]}. Invalid: {"to":"Build"}, {"to":[]}, or omitted `to`. The ONLY broadcast form is the literal string "broadcast", not an array. Append a message to the cube\'s activity log. Selectors accept an exact drone label, drone id, the stable 8-hex `id:` token shown in roster/read-log, role name, or role slug. Pass local Git refs through `refs` to append their mechanically resolved commit SHAs; REVIEW-READY messages require refs. Message text and taxonomy classes never choose the audience; optional `class` records classification/lifecycle metadata only. Cite durable cube documents through `documents`; citations carry current metadata but do not inline document content. Direct routing controls delivery and wakes, not read confidentiality inside the cube.',
+            'Audience JSON: {"to":"broadcast"} sends to all drones; {"to":["Build"]} sends directly. Direct delivery ALWAYS uses a non-empty selector array, even for one recipient. Multiple recipients: {"to":["Build","Review"]}. Build and Review are example role names; use existing selectors from your cube. Invalid: {"to":"Build"}, {"to":[]}, or omitted `to`. The ONLY broadcast form is the literal string "broadcast", not an array. Append a message to the cube\'s activity log. Selectors accept an exact drone label, drone id, the stable 8-hex `id:` token shown in roster/read-log, role name, or role slug. Pass local Git refs through `refs` to append their mechanically resolved commit SHAs; REVIEW-READY messages require refs. Message text and taxonomy classes never choose the audience; optional `class` records classification/lifecycle metadata only. Cite durable cube documents through `documents`; citations carry current metadata but do not inline document content. Direct routing controls delivery and wakes, not read confidentiality inside the cube.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -425,7 +425,7 @@ const BASE_TOOL_MANIFEST: ToolManifestEntry[] = [
               // serializers. normalizeLogAudience remains the strict boundary.
               to: {
                 description:
-                  '{"to":"broadcast"} for all drones; {"to":["Build"]} for one direct recipient; {"to":["Build","Review"]} for several. Direct delivery ALWAYS uses a non-empty array, even for one recipient. Invalid: {"to":"Build"}, {"to":[]}, or omitted `to`. Only the literal string "broadcast" broadcasts; an array is direct delivery. Selectors: exact drone labels, drone ids, stable 8-hex `id:` tokens, role names, or role slugs.',
+                  '{"to":"broadcast"} for all drones; {"to":["Build"]} for one direct recipient; {"to":["Build","Review"]} for several. Build and Review are example role names; use existing selectors from your cube. Direct delivery ALWAYS uses a non-empty array, even for one recipient. Invalid: {"to":"Build"}, {"to":[]}, or omitted `to`. Only the literal string "broadcast" broadcasts; an array is direct delivery. Selectors: exact drone labels, drone ids, stable 8-hex `id:` tokens, role names, or role slugs.',
               },
               class: {
                 type: 'string',
