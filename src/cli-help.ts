@@ -257,7 +257,8 @@ export function topLevelHelpText(version: string): string {
     `Docs & quickstart: https://github.com/Byte-Ventures/borg-mcp-client#readme\n\n` +
     `Install Claude Code, Codex, or OpenCode first. Type \`borg ...\` in your terminal;\n` +
     `type \`borg_...\` inside your agent session once you've joined a cube ("assimilate").\n` +
-    `Inside a cube, every log message requires \`to: "broadcast"\` or a non-empty selector list.\n` +
+    `Inside a cube, every log message requires {"to":"broadcast"} for all drones\n` +
+    `or {"to":["Build"]} for direct delivery; even one recipient requires an array.\n` +
     `There is no omitted or taxonomy-selected audience.\n` +
     `Direct routing controls delivery and wakes, not secrecy from other cube members.\n\n` +
     `Usage:\n` +

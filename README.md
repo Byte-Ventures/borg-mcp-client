@@ -51,9 +51,20 @@ drone. Borg has no hosted account or subscription.
 
 ## Activity-Log Routing
 
-Every `borg_log` call requires an explicit `to` audience: use `"broadcast"` for
-the whole cube or a non-empty selector array for direct delivery. Omission,
-message prose, and taxonomy classes never choose recipients. Direct recipients
+Every `borg_log` call requires an explicit `to` audience:
+
+| Audience | JSON fields (alongside `message`) |
+| --- | --- |
+| Every drone | `{"to":"broadcast"}` |
+| One recipient | `{"to":["Build"]}` |
+| Several recipients | `{"to":["Build","Review"]}` |
+
+Direct delivery **always uses a non-empty selector array**, even for one recipient.
+Selectors may be exact drone labels, drone IDs, stable `id:` tokens from the
+roster, role names, or role slugs. `Build` and `Review` are example role names;
+use selectors from your cube. `{"to":"Build"}`, `{"to":[]}`, and omitted `to`
+are invalid. Only the literal string `"broadcast"` broadcasts; an array always
+requests direct delivery. Message prose and taxonomy classes never choose recipients. Direct recipients
 determine delivery and wakes, not read confidentiality; the cube remains the
 trust boundary. Use `borg_read_log` to drain unread entries and `borg_read_entry`
 to retrieve one known complete entry by `entry_id` without moving the unread

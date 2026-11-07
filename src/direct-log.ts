@@ -19,23 +19,29 @@ function decodeSerializedAudience(value: string): unknown {
 export function normalizeLogAudience(rawValue: unknown): LogAudience {
   if (rawValue === 'broadcast') return rawValue;
   const value = typeof rawValue === 'string' ? decodeSerializedAudience(rawValue) : rawValue;
+  const example = typeof value === 'string' && value.trim() && Buffer.byteLength(value, 'utf8') <= 120 && !/[\u0000-\u001f\u007f-\u009f]/.test(value)
+    ? value.trim() : 'Build';
+  const correction = rawValue === '"broadcast"'
+    ? 'For broadcast use {"to":"broadcast"}, without extra quotes or an array.'
+    : `For direct delivery use ${JSON.stringify({ to: [example] })}; even one recipient needs an array. For all drones use {"to":"broadcast"}.`;
+  const invalid = (message: string) => new Error(`${message}. ${correction}`);
   if (!Array.isArray(value) || value.length === 0 || value.length > 100) {
-    throw new Error('to is required and must be "broadcast" or contain 1-100 recipient selectors');
+    throw invalid('to is required and must be "broadcast" or contain 1-100 recipient selectors');
   }
   for (const selector of value) {
     if (typeof selector !== 'string') {
-      throw new Error('to recipient selectors must be strings containing 1-120 UTF-8 bytes');
+      throw invalid('to recipient selectors must be strings containing 1-120 UTF-8 bytes');
     }
     const bytes = Buffer.byteLength(selector, 'utf8');
     if (bytes < 1 || bytes > 120) {
-      throw new Error('to recipient selectors must be strings containing 1-120 UTF-8 bytes');
+      throw invalid('to recipient selectors must be strings containing 1-120 UTF-8 bytes');
     }
     if (selector !== selector.trim() || /[\u0000-\u001f\u007f-\u009f]/.test(selector)) {
-      throw new Error('to recipient selectors must be trimmed and control-free');
+      throw invalid('to recipient selectors must be trimmed and control-free');
     }
   }
   if (new Set(value).size !== value.length) {
-    throw new Error('to recipient selectors must be unique');
+    throw invalid('to recipient selectors must be unique');
   }
   return [...value];
 }
