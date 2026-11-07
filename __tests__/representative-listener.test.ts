@@ -281,14 +281,22 @@ describe('review controls (S2 round 1): EOF and startup under a growing log', ()
     } });
     trigger(); await client.wait(() => calls >= 3);
     client.child.stdin!.end(); const atEof = calls;
-    await delay(300);
-    const afterEof = calls;
-    const exitedWhileGrowing = client.child.exitCode;
-    grow = false;
-    const [code] = await client.exited;
-    expect(afterEof).toBeLessThanOrEqual(atEof + 1);
-    expect(exitedWhileGrowing).toBe(0);
-    expect(code).toBe(0);
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // Keep growth enabled until exit: ignoring EOF must hit the deadline,
+      // not pass because the fixture stopped returning has_more.
+      const [code] = await Promise.race([
+        client.exited,
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error('listener did not exit on EOF while the log kept growing')), 5_000);
+        }),
+      ]);
+      expect(calls).toBeLessThanOrEqual(atEof + 1);
+      expect(code).toBe(0);
+    } finally {
+      clearTimeout(deadline);
+      grow = false;
+    }
     expect(await ownerFiles()).toEqual([]);
   });
 
@@ -372,4 +380,3 @@ describe('review controls (S2 round 3): every startup step honors EOF', () => {
     expect(await ownerFiles()).toEqual([]);
   }, 15_000);
 });
-
