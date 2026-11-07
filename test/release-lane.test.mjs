@@ -16,6 +16,7 @@ import { verifyReleaseTrigger } from '../scripts/verify-release-trigger.mjs';
 import {
   assertArtifactIdentity,
   assertJourneyTranscript,
+  assertOperatorConfigUnchanged,
   assertServerProcessArgv,
   isolatedClientEnv,
   parseReleaseExerciseArgs,
@@ -225,11 +226,13 @@ test('packed-client release journeys isolate Borg and native agent state', () =>
     HOME: '/operator/home',
     BORG_STATE_ROOT: '/operator/state',
     CODEX_HOME: '/operator/codex',
+    CLAUDE_CONFIG_DIR: '/operator/claude',
     XDG_CONFIG_HOME: '/operator/config',
   });
   assert.equal(env.HOME, '/tmp/borg-release-sandbox');
   assert.equal(env.BORG_STATE_ROOT, '/tmp/borg-release-sandbox');
   assert.equal(env.CODEX_HOME, '/tmp/borg-release-sandbox/.codex');
+  assert.equal(env.CLAUDE_CONFIG_DIR, '/tmp/borg-release-sandbox/.claude');
   assert.equal(env.XDG_CONFIG_HOME, '/tmp/borg-release-sandbox/.config');
 });
 
@@ -258,6 +261,109 @@ test('operator configuration snapshot detects durable launch preference mutation
     assert.notDeepEqual(after, before);
   } finally {
     await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('operator snapshot tolerates session counters and JSON ordering, not durable or unknown keys', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'borg-release-config-keys-'));
+  const path = join(home, '.claude.json');
+  try {
+    await writeFile(path, JSON.stringify({ mcpServers: { borg: { command: 'borg-mcp' } }, hooks: {}, permissions: {}, futureConfig: true, pluginUsage: 1, promptQueueUseCount: 2 }));
+    const before = await snapshotOperatorConfig(home);
+    await writeFile(path, JSON.stringify({ promptQueueUseCount: 3, pluginUsage: 4, futureConfig: true, permissions: {}, hooks: {}, mcpServers: { borg: { command: 'borg-mcp' } } }, null, 2));
+    assert.deepEqual(await snapshotOperatorConfig(home), before);
+    const stable = await readFile(path, 'utf8');
+    for (const key of ['mcpServers', 'hooks', 'permissions', 'futureConfig']) {
+      const config = JSON.parse(stable);
+      config[key] = 'changed';
+      await writeFile(path, JSON.stringify(config));
+      assert.notDeepEqual(await snapshotOperatorConfig(home), before, key);
+    }
+    await writeFile(path, '{broken');
+    await assert.rejects(() => snapshotOperatorConfig(home), SyntaxError);
+    await rm(path);
+    assert.notDeepEqual(await snapshotOperatorConfig(home), before);
+    const absent = await snapshotOperatorConfig(home);
+    await writeFile(path, '{}');
+    assert.notDeepEqual(await snapshotOperatorConfig(home), absent);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('operator snapshot covers durable agent directories and ignores unrelated runtime payloads', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'borg-release-config-directories-'));
+  try {
+    await mkdir(join(home, '.borg'), { recursive: true });
+    await mkdir(join(home, '.config', 'borgmcp'), { recursive: true });
+    const before = await snapshotOperatorConfig(home);
+    await mkdir(join(home, '.borg', 'scratch'));
+    await writeFile(join(home, '.borg', 'scratch', 'runtime'), 'activity');
+    await writeFile(join(home, '.config', 'borgmcp', 'opencode-v2.db-wal'), 'activity');
+    await writeFile(join(home, '.config', 'borgmcp', 'opencode-v2-someHost.journal.json'), '{}');
+    assert.deepEqual(await snapshotOperatorConfig(home), before);
+    for (const directory of ['.claude/hooks', '.claude/agents', '.claude/commands', '.claude/skills', '.claude/plugins', '.codex/skills', '.config/opencode/plugins']) {
+      const target = join(home, directory);
+      await mkdir(target, { recursive: true });
+      const stable = await snapshotOperatorConfig(home);
+      await writeFile(join(target, 'new-config'), 'durable');
+      assert.notDeepEqual(await snapshotOperatorConfig(home), stable, directory);
+    }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('operator verification preserves the primary failure when config drifts or becomes unreadable', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'borg-release-config-error-'));
+  const primary = new Error('resolved artifact integrity does not match its declared role');
+  try {
+    const before = await snapshotOperatorConfig(home);
+    await assert.rejects(async () => {
+      try { throw primary; } finally { await assertOperatorConfigUnchanged(before, primary, home); }
+    }, (error) => error === primary);
+    for (const content of ['{"mcpServers":{"unexpected":{}}}', '{broken']) {
+      await writeFile(join(home, '.claude.json'), content);
+      await assert.rejects(() => assertOperatorConfigUnchanged(before, undefined, home));
+      await assert.rejects(() => assertOperatorConfigUnchanged(before, primary, home), (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.cause, primary);
+        assert.equal(error.errors[0], primary);
+        assert.match(error.message, /resolved artifact integrity/);
+        assert.equal(error.errors.length, 2);
+        return true;
+      });
+    }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('release child isolation refuses harness writes even to ignored counter and runtime paths', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'borg-release-write-control-'));
+  const operatorHome = join(temporary, 'operator');
+  const isolatedHome = join(temporary, 'isolated');
+  try {
+    await mkdir(operatorHome);
+    await mkdir(isolatedHome);
+    const env = isolatedClientEnv(isolatedHome);
+    assert.ok(env.BORGMCP_TEST_FORBIDDEN_HOME);
+    assert.equal(env.BORGMCP_TEST_ALLOWED_ROOTS, isolatedHome);
+    const guardedModule = pathToFileURL(join(root, 'dist', 'guarded-fs.js')).href;
+    const source = `
+      import { writeFileSync, TestIsolationError } from ${JSON.stringify(guardedModule)};
+      for (const path of ${JSON.stringify([join(operatorHome, '.claude.json'), join(operatorHome, '.config', 'borgmcp', 'opencode-v2.db-wal')])}) {
+        try { writeFileSync(path, '{"pluginUsage":1}'); throw new Error('operator write was allowed'); }
+        catch (error) { if (!(error instanceof TestIsolationError)) throw error; }
+      }
+      writeFileSync(${JSON.stringify(join(isolatedHome, '.claude.json'))}, '{"pluginUsage":1}');`;
+    execFileSync(process.execPath, ['--input-type=module', '-e', source], {
+      env: { ...env, BORGMCP_TEST_FORBIDDEN_HOME: operatorHome },
+    });
+    assert.equal(await readFile(join(isolatedHome, '.claude.json'), 'utf8'), '{"pluginUsage":1}');
+    assert.equal((await snapshotOperatorConfig(operatorHome))[join(operatorHome, '.claude.json')], 'missing');
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
   }
 });
 
