@@ -243,19 +243,6 @@ export async function snapshotOperatorConfig(homeRoot = homedir()) {
   return snapshot;
 }
 
-export async function assertOperatorConfigUnchanged(before, primaryError, homeRoot = homedir()) {
-  try {
-    assert.deepEqual(await snapshotOperatorConfig(homeRoot), before,
-      'release exercise observed a durable change in the invoking user\'s global agent or Borg configuration');
-  } catch (error) {
-    if (primaryError !== undefined) {
-      throw new AggregateError([primaryError, error],
-        `${primaryError.message ?? primaryError}; operator configuration verification also failed`, { cause: primaryError });
-    }
-    throw error;
-  }
-}
-
 export function assertJourneyTranscript(transcript, expectedFooter, report) {
   assert.equal(report.stdinTTY, true, 'PTY precondition failed: stdin is not a TTY');
   assert.equal(report.stdoutTTY, true, 'PTY precondition failed: stdout is not a TTY');
@@ -840,9 +827,19 @@ export async function exerciseRelease(options) {
     primaryError = error;
     throw error;
   } finally {
-    if (directServer) await stopProcess(directServer);
-    await rm(temporary, { recursive: true, force: true });
-    await assertOperatorConfigUnchanged(operatorConfigBefore, primaryError);
+    const failures = [];
+    try { if (directServer) await stopProcess(directServer); } catch (error) { failures.push(error); }
+    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    try {
+      assert.deepEqual(await snapshotOperatorConfig(), operatorConfigBefore,
+        'release exercise observed a durable change in the invoking user\'s global agent or Borg configuration');
+    } catch (error) { failures.push(error); }
+    if (failures.length) {
+      if (primaryError !== undefined) failures.unshift(primaryError);
+      if (failures.length === 1) throw failures[0];
+      throw new AggregateError(failures,
+        `${failures[0].message ?? failures[0]}; cleanup or operator configuration verification also failed`, { cause: failures[0] });
+    }
   }
 }
 

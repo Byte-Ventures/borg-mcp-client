@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import childProcess from 'node:child_process';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -16,8 +19,8 @@ import { verifyReleaseTrigger } from '../scripts/verify-release-trigger.mjs';
 import {
   assertArtifactIdentity,
   assertJourneyTranscript,
-  assertOperatorConfigUnchanged,
   assertServerProcessArgv,
+  exerciseRelease,
   isolatedClientEnv,
   parseReleaseExerciseArgs,
   ptyCommand,
@@ -314,27 +317,57 @@ test('operator snapshot covers durable agent directories and ignores unrelated r
   }
 });
 
-test('operator verification preserves the primary failure when config drifts or becomes unreadable', async () => {
+test('exercise preserves artifact failures through cleanup failures and still verifies operator config', async (t) => {
   const home = await mkdtemp(join(tmpdir(), 'borg-release-config-error-'));
   const primary = new Error('resolved artifact integrity does not match its declared role');
+  const cleanup = new Error('temporary removal failed');
+  const savedHome = process.env.HOME;
+  const originalRealpath = fs.promises.realpath;
+  const originalRm = fs.promises.rm;
+  const leftovers = [];
+  let cleanupFails = false;
+  let changedConfig;
+  const configPath = join(home, '.claude.json');
+  t.mock.method(childProcess, 'execFileSync', () => '11.18.0');
+  t.mock.method(fs.promises, 'realpath', async (path, ...args) => {
+    if (path === join(home, 'client.tgz')) throw primary;
+    return originalRealpath(path, ...args);
+  });
+  t.mock.method(fs.promises, 'rm', async (path, ...args) => {
+    if (cleanupFails && String(path).includes('borgmcp-release-exercise-')) {
+      leftovers.push(path);
+      if (changedConfig !== undefined) await writeFile(configPath, changedConfig);
+      throw cleanup;
+    }
+    return originalRm(path, ...args);
+  });
+  syncBuiltinESMExports();
+  process.env.HOME = home;
   try {
-    const before = await snapshotOperatorConfig(home);
-    await assert.rejects(async () => {
-      try { throw primary; } finally { await assertOperatorConfigUnchanged(before, primary, home); }
-    }, (error) => error === primary);
-    for (const content of ['{"mcpServers":{"unexpected":{}}}', '{broken']) {
-      await writeFile(join(home, '.claude.json'), content);
-      await assert.rejects(() => assertOperatorConfigUnchanged(before, undefined, home));
-      await assert.rejects(() => assertOperatorConfigUnchanged(before, primary, home), (error) => {
+    await writeFile(configPath, '{}');
+    const run = () => exerciseRelease({ clientTarball: join(home, 'client.tgz') });
+    await assert.rejects(run, (error) => error === primary);
+    cleanupFails = true;
+    for (const content of [undefined, '{"mcpServers":{"unexpected":{}}}', '{broken']) {
+      await writeFile(configPath, '{}');
+      changedConfig = content;
+      await assert.rejects(run, (error) => {
         assert.ok(error instanceof AggregateError);
         assert.equal(error.cause, primary);
         assert.equal(error.errors[0], primary);
+        assert.equal(error.errors[1], cleanup);
         assert.match(error.message, /resolved artifact integrity/);
-        assert.equal(error.errors.length, 2);
+        assert.equal(error.errors.length, content === undefined ? 2 : 3);
+        if (content === '{broken') assert.ok(error.errors[2] instanceof SyntaxError);
+        else if (content !== undefined) assert.match(error.errors[2].message, /durable change/);
         return true;
       });
     }
   } finally {
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    for (const path of leftovers) await rm(path, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
   }
 });
