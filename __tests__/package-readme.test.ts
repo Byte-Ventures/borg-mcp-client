@@ -117,7 +117,7 @@ describe('published package artifact', () => {
         packedToolManifest.indexOf("name: 'borg_log'"),
         packedToolManifest.indexOf("name: 'borg_list_cubes'"),
       );
-      expect(packedLogSchema).toContain('Required explicit audience');
+      expect(packedLogSchema).toContain('{"to":["Build"]}');
       expect(packedLogSchema).not.toContain('oneOf');
       const relativeLinks = [...packedReadme.matchAll(/\[[^\]]+\]\((?!https?:|#)([^)#]+)(?:#[^)]+)?\)/g)]
         .map((match) => match[1].replace(/^\.\//, ''));
