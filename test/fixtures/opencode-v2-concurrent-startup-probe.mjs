@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, fork } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
+import { finished } from 'node:stream/promises';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -25,7 +26,7 @@ async function bounded(promise) {
   } finally { clearTimeout(timer); }
 }
 if (process.argv[2] === '--worker') {
-  const [root, binary, version, directory] = process.argv.slice(3);
+  const [, binary, version, directory] = process.argv.slice(3);
   process.send({ type: 'waiting' });
   const [{ env }] = await once(process, 'message');
   let launch, tui, client, descriptorPath;
@@ -82,7 +83,7 @@ if (process.argv[2] === '--worker') {
   };
   let generations = 0;
   const provider = createServer(async (req, res) => {
-    for await (const chunk of req) {} // Drain fixture input without retaining it.
+    await finished(req.resume(), { cleanup: true }); // Drain input without retaining it.
     generations++;
     res.setHeader('Content-Type', 'text/event-stream');
     for (const value of [
