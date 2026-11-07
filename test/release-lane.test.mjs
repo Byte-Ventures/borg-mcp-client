@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
+import { inspect } from 'node:util';
 import { verifyPackedArtifact } from '../scripts/verify-packed-artifact.mjs';
 import { verifyLockRegistry, verifyRegistryMetadata } from '../scripts/verify-lock-registry.mjs';
 import {
@@ -321,6 +322,8 @@ test('exercise preserves artifact failures through cleanup failures and still ve
   const home = await mkdtemp(join(tmpdir(), 'borg-release-config-error-'));
   const primary = new Error('resolved artifact integrity does not match its declared role');
   const cleanup = new Error('temporary removal failed');
+  const secret = 'TOK634';
+  const malformed = `{"token":${secret}}`;
   const savedHome = process.env.HOME;
   const originalRealpath = fs.promises.realpath;
   const originalRm = fs.promises.rm;
@@ -348,7 +351,7 @@ test('exercise preserves artifact failures through cleanup failures and still ve
     const run = () => exerciseRelease({ clientTarball: join(home, 'client.tgz') });
     await assert.rejects(run, (error) => error === primary);
     cleanupFails = true;
-    for (const content of [undefined, '{"mcpServers":{"unexpected":{}}}', '{broken']) {
+    for (const content of [undefined, '{"mcpServers":{"unexpected":{}}}', malformed]) {
       await writeFile(configPath, '{}');
       changedConfig = content;
       await assert.rejects(run, (error) => {
@@ -358,7 +361,11 @@ test('exercise preserves artifact failures through cleanup failures and still ve
         assert.equal(error.errors[1], cleanup);
         assert.match(error.message, /resolved artifact integrity/);
         assert.equal(error.errors.length, content === undefined ? 2 : 3);
-        if (content === '{broken') assert.ok(error.errors[2] instanceof SyntaxError);
+        if (content === malformed) {
+          assert.ok(error.errors[2] instanceof SyntaxError);
+          assert.doesNotMatch(inspect(error, { depth: null }), new RegExp(secret));
+          assert.equal(error.errors[2].cause, undefined);
+        }
         else if (content !== undefined) assert.match(error.errors[2].message, /durable change/);
         return true;
       });
@@ -368,6 +375,23 @@ test('exercise preserves artifact failures through cleanup failures and still ve
     t.mock.restoreAll();
     syncBuiltinESMExports();
     for (const path of leftovers) await rm(path, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('malformed operator JSON fails closed without exposing configuration in diagnostics', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'borg-release-config-secret-'));
+  const secret = 'TOK634';
+  try {
+    await writeFile(join(home, '.claude.json'), `{"token":${secret}}`);
+    await assert.rejects(() => snapshotOperatorConfig(home), (error) => {
+      assert.ok(error instanceof SyntaxError);
+      assert.match(error.message, /cannot verify malformed \.claude\.json/);
+      assert.doesNotMatch(inspect(error, { depth: null }), new RegExp(secret));
+      assert.equal(error.cause, undefined);
+      return true;
+    });
+  } finally {
     await rm(home, { recursive: true, force: true });
   }
 });

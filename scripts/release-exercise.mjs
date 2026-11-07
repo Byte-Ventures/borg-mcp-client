@@ -224,7 +224,13 @@ export async function snapshotOperatorConfig(homeRoot = homedir()) {
     paths.map(async (target) => [target, await hashProtectedPath(target, excludedPaths)]),
   ));
   try {
-    const config = JSON.parse(await readFile(claudePath, 'utf8'));
+    const source = await readFile(claudePath, 'utf8');
+    let config;
+    try { config = JSON.parse(source); } catch {
+      // Native JSON errors can quote configuration secrets. Do not retain the
+      // original error as a cause: aggregate diagnostics print nested errors.
+      throw new SyntaxError('release exercise cannot verify malformed .claude.json; expected valid JSON');
+    }
     assert.ok(config && typeof config === 'object' && !Array.isArray(config), '.claude.json must contain an object');
     // Claude's session counters are ambient activity. All other keys (including
     // unknown future configuration) remain covered; the client write guard above
