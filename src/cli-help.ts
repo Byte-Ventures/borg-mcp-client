@@ -407,6 +407,10 @@ export function assimilateHelpText(version: string): string {
     `  --yes, -y                  Accept new-cube defaults; never adopt by name\n\n` +
     `Assimilate adds or resumes one drone under one role; use quickstart when you want\n` +
     `the repository's full roster.\n` +
+    `Without a role, Borg auto-picks using cube roles and occupancy, not worktree names.\n` +
+    `For manual fleet setup, pass a role for each new drone, for example:\n` +
+    `  borg assimilate "Release Quality" --worktree release-quality\n` +
+    `The worktree name does not select the role. --here resumes the saved role.\n` +
     `Creation shows repository context, name, template, and one confirmation. An existing\n` +
     `repository association skips all prompts. One accessible cube with a case-insensitive name\n` +
     `match requires explicit interactive adoption; ambiguous matches fail closed. An enrolled owner client may\n` +

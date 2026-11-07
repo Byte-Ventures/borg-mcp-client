@@ -435,7 +435,7 @@ export async function launchAssimilatedAgent(input, deps) {
     const { flags, result, cubeDetail, assignedRole, apiUrl, cli, effectiveModel, agentCwd, seatWorktree, scratchRoot, launchAccessPaths, monitorStateRoot, spawnedWorktreePath, originalCwd, } = input;
     deps.setTerminalTitle(result.drone_label, cubeDetail.name);
     const useColor = deps.isTTY() && !process.env.NO_COLOR && !process.env.CI;
-    deps.stdout(renderAssimilationWelcome(result.drone_label, assignedRole.name, cubeDetail.name, useColor, apiUrl));
+    deps.stdout(renderAssimilationWelcome(result.drone_label, assignedRole.name, cubeDetail.name, useColor, apiUrl, input.roleAutoPicked));
     if (!await deps.probeMcpReady()) {
         deps.stderr(`warning: borg-mcp readiness probe did not complete within the timeout; ` +
             `launching ${cli} anyway — the kickoff prompt's ToolSearch fallback ` +
@@ -1595,6 +1595,7 @@ async function runAssimilationFlow(args, deps, options, validateConnectionRole, 
         result,
         cubeDetail,
         assignedRole,
+        roleAutoPicked: args.role === undefined && savedLocalRole === undefined,
         apiUrl: auth.apiUrl,
         cli: cli,
         effectiveModel,
