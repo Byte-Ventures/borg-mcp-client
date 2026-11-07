@@ -11,6 +11,9 @@ When Borg launches Codex, exact-name policies are handled automatically.
 Borg adds the missing canonical or legacy counterpart to per-tool settings and
 enabled/disabled lists for that launch, preserving the existing settings. It
 verifies the result with Codex and leaves your saved configuration untouched.
+The private Codex server also receives and verifies the resolved Borg policy,
+including server enablement, default approvals and enabled/disabled lists,
+whether or not any tool name changes.
 This also works with `--no-borg-approval-override`: name compatibility is separate
 from Borg's existing coordination approval override. Conflicting counterpart
 settings and patterns that cover only one spelling still require review.

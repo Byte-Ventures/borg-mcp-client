@@ -12,7 +12,7 @@ export interface ApprovalInspection {
 }
 export interface LaunchApprovalDecision {
     codexArgs: string[];
-    /** Equivalent-name settings follow user flags; approval overrides precede them. */
+    /** Verified effective Borg policy follows user flags on both Codex processes. */
     codexCompatibilityArgs?: string[];
     openCodePermission?: string;
     warning?: string;
@@ -29,6 +29,8 @@ export declare function codexBorgApprovalArgs(tools?: string[], existingTools?: 
 export interface ApprovalIo {
     readClaudeConfig?: () => Promise<unknown> | unknown;
     readCodexConfig: (approvalArgs?: string[], compatibilityArgs?: string[]) => Promise<unknown> | unknown;
+    /** Query the private server's configuration without the TUI's selected profile/flags. */
+    readCodexServerConfig: (configArgs: string[]) => Promise<unknown> | unknown;
     readOpenCodeConfig: (permissionOverride?: string) => Promise<unknown> | unknown;
     isTTY: () => boolean;
     confirm: (message: string) => Promise<string>;
