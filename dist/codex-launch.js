@@ -59,6 +59,15 @@ export function buildCodexLaunchArgs(options) {
     if (options.remote.args.length !== 2 || options.remote.args[0] !== '--remote' || options.remote.args[1] !== remoteValue) {
         return { ready: false, reason: 'The Borg-owned Codex remote socket is unavailable.' };
     }
+    // Name compatibility copies the effective user policy and must follow its
+    // original config flags. Keep it before an explicit end-of-options marker.
+    const separator = passthroughArgs.indexOf('--');
+    const insertAt = separator < 0 ? passthroughArgs.length : separator;
+    const compatiblePassthrough = [
+        ...passthroughArgs.slice(0, insertAt),
+        ...(options.compatibilityArgs ?? []),
+        ...passthroughArgs.slice(insertAt),
+    ];
     return {
         ready: true,
         args: [
@@ -70,7 +79,7 @@ export function buildCodexLaunchArgs(options) {
             ...codexStateRootConfigArgs(),
             ...(options.seatExpectationArgs ?? []),
             ...options.remote.args,
-            ...withCodexCwdArg([...passthroughArgs, options.kickoff], options.cwd),
+            ...withCodexCwdArg([...compatiblePassthrough, options.kickoff], options.cwd),
         ],
     };
 }

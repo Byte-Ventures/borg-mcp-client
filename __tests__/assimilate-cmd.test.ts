@@ -1138,6 +1138,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
       exec, runSync,
       resolveCliApprovals: vi.fn(async () => ({
         codexArgs: ['-c', 'mcp_servers.borg.tools."borg:regen".approval_mode="auto"'],
+        codexCompatibilityArgs: ['-c', 'mcp_servers.borg.disabled_tools=["borg_remove-document","borg_remove_document"]'],
       })),
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
       getCube: vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] })),
@@ -1153,6 +1154,14 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
       BORG_SESSION: '1',
     }));
     const [, kickoffArgs] = exec.mock.calls[0];
+    expect(deps.prepareCodexRemoteLaunch).toHaveBeenCalledWith({
+      cwd: '/work/myrepo',
+      configArgs: [
+        '-c', 'mcp_servers.borg.tools."borg:regen".approval_mode="auto"',
+        '-c', 'mcp_servers.borg.disabled_tools=["borg_remove-document","borg_remove_document"]',
+      ],
+    });
+    expect(kickoffArgs).toContain('mcp_servers.borg.disabled_tools=["borg_remove-document","borg_remove_document"]');
     // Codex MCP children only receive pinned `-c` env. Verify session,
     // identity, and transport are all independently present before the TUI
     // remote arguments and kickoff positional.

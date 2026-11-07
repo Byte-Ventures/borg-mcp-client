@@ -295,7 +295,7 @@ export async function prepareCodexRemoteLaunch(deps) {
  * invariant; the app-server socket is the wake-DELIVERY wire, not a liveness
  * signal).
  */
-export function defaultCodexRemoteDeps() {
+export function defaultCodexRemoteDeps(options = {}) {
     return {
         spawnAppServer: (socketPath) => {
             // gh#851: this app-server — NOT the `codex --remote` TUI — spawns the
@@ -316,6 +316,7 @@ export function defaultCodexRemoteDeps() {
             // exactly like the BORG_SESSION override — zero injection surface.
             const child = spawn('codex', [
                 'app-server',
+                ...(options.configArgs ?? []),
                 ...codexBorgSessionConfigArgs(),
                 ...codexAgentKindConfigArgs(),
                 ...codexRemoteWakeConfigArgs(),
@@ -326,6 +327,7 @@ export function defaultCodexRemoteDeps() {
             ], {
                 stdio: ['ignore', 'ignore', 'pipe'],
                 shell: false,
+                ...(options.cwd ? { cwd: options.cwd } : {}),
                 env: {
                     ...process.env,
                     [BORG_SESSION_ENV]: '1',

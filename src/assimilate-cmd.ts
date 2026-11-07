@@ -10,7 +10,7 @@ import {
 import { validateName } from './name-validator.js';
 import { renderAssimilationWelcome } from './assimilate-welcome.js';
 import { shellEscape } from './shell-escape.js';
-import { type CodexRemoteLaunch } from './codex-remote.js';
+import { type CodexRemoteLaunch, type CodexRemoteConfigOptions } from './codex-remote.js';
 import {
   buildAgentKickoffPrompt,
   buildKickoffWakePathClause,
@@ -403,7 +403,7 @@ export interface AssimilateDeps {
   /** Save the resolved CLI for a newly-created sibling worktree. */
   setCliPreferenceForWorktree: (cli: BorgCli, worktree: string) => Promise<void>;
   resolveCli: (explicit?: BorgCli) => Promise<BorgCli>;
-  prepareCodexRemoteLaunch: () => Promise<CodexRemoteLaunch>;
+  prepareCodexRemoteLaunch: (options?: CodexRemoteConfigOptions) => Promise<CodexRemoteLaunch>;
 
 }
 
@@ -1039,7 +1039,10 @@ export async function launchAssimilatedAgent(
   for (const key of modelEnv.unset) delete childEnv[key];
 
   if (cli === 'codex') {
-    codexRemote = await deps.prepareCodexRemoteLaunch();
+    codexRemote = await deps.prepareCodexRemoteLaunch({
+      cwd: agentCwd,
+      configArgs: [...launchApproval.codexArgs, ...(launchApproval.codexCompatibilityArgs ?? [])],
+    });
     if (!codexRemote.ready) {
       const stderr = codexRemote.stderr ? `\n${codexRemote.stderr}` : '';
       deps.stderr(`Codex launch refused: ${codexRemote.reason}${stderr}\n`);
@@ -1061,6 +1064,7 @@ export async function launchAssimilatedAgent(
       cwd: agentCwd,
       kickoff,
       approvalArgs: launchApproval.codexArgs,
+      compatibilityArgs: launchApproval.codexCompatibilityArgs,
       accessArgs: codexLaunchDirectoryArgs(launchAccessPaths),
     });
     if (!plan.ready) {

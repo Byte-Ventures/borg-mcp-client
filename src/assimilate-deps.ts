@@ -602,6 +602,6 @@ export function buildDefaultAssimilateDeps(
       }, () => process.stdin.isTTY === true)
     ),
     setCliPreferenceForWorktree: (cli, worktree) => setProjectCliPreference(cli, worktree),
-    prepareCodexRemoteLaunch: () => prepareCodexRemoteLaunch(defaultCodexRemoteDeps()),
+    prepareCodexRemoteLaunch: (options) => prepareCodexRemoteLaunch(defaultCodexRemoteDeps(options)),
   };
 }

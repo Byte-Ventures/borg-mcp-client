@@ -106,6 +106,15 @@ describe('defaultCodexRemoteDeps().spawnAppServer carries activation, CLI identi
     }
   });
 
+  it('passes resolved tool policies and the inspected project cwd to the MCP-owning app-server', () => {
+    const configArgs = ['-c', 'mcp_servers.borg.disabled_tools=["borg_read-log","borg_read_log"]'];
+    defaultCodexRemoteDeps({ configArgs, cwd: '/project/review' }).spawnAppServer(SOCK);
+    const [, args, options] = spawnMock.mock.calls[0];
+    expect(args.slice(0, 3)).toEqual(['app-server', ...configArgs]);
+    expect(options.cwd).toBe('/project/review');
+    expect(options.shell).toBe(false);
+  });
+
   it('sets matching env markers over inherited env and pipes stderr without enabling a shell', () => {
     defaultCodexRemoteDeps().spawnAppServer(SOCK);
 

@@ -1,5 +1,5 @@
 import type { Role, RoleOccupant } from './role-resolver.js';
-import { type CodexRemoteLaunch } from './codex-remote.js';
+import { type CodexRemoteLaunch, type CodexRemoteConfigOptions } from './codex-remote.js';
 import { type ActiveCube as CanonicalActiveCube, type BorgCli } from './cubes.js';
 import { type LiveInboxMonitor } from './seat-reattach-guard.js';
 import type { SeatStatus } from './seat-probe.js';
@@ -233,7 +233,7 @@ export interface AssimilateDeps {
     /** Save the resolved CLI for a newly-created sibling worktree. */
     setCliPreferenceForWorktree: (cli: BorgCli, worktree: string) => Promise<void>;
     resolveCli: (explicit?: BorgCli) => Promise<BorgCli>;
-    prepareCodexRemoteLaunch: () => Promise<CodexRemoteLaunch>;
+    prepareCodexRemoteLaunch: (options?: CodexRemoteConfigOptions) => Promise<CodexRemoteLaunch>;
 }
 export type AuthorityResolutionDeps = Pick<AssimilateDeps, 'connectServer' | 'cwd' | 'defaultAuthority' | 'detectLocalServer' | 'ensureLocalServerInstalled' | 'getActiveCube' | 'getHostname' | 'hasPersistedActiveCube' | 'isTTY' | 'peekPendingServerEnrollment' | 'preparePrivateRoot' | 'prompt' | 'promptSecret' | 'resumePendingServerEnrollment' | 'resumeServerEnrollment' | 'runSync' | 'stderr'>;
 type AssimilationAuthority = {

@@ -12,6 +12,8 @@ export interface ApprovalInspection {
 }
 export interface LaunchApprovalDecision {
     codexArgs: string[];
+    /** Equivalent-name settings follow user flags; approval overrides precede them. */
+    codexCompatibilityArgs?: string[];
     openCodePermission?: string;
     warning?: string;
 }
@@ -23,10 +25,10 @@ export declare function openCodeApprovalRepairObject(tools?: string[]): Record<s
  * deep-merged or replaces the configured permission value. */
 export declare function mergeOpenCodePermission(permission: unknown, tools?: string[]): Record<string, unknown>;
 export declare function inspectOpenCodeBorgApprovals(config: unknown): ApprovalInspection;
-export declare function codexBorgApprovalArgs(tools?: string[]): string[];
+export declare function codexBorgApprovalArgs(tools?: string[], existingTools?: Record<string, unknown>): string[];
 export interface ApprovalIo {
     readClaudeConfig?: () => Promise<unknown> | unknown;
-    readCodexConfig: (approvalArgs?: string[]) => Promise<unknown> | unknown;
+    readCodexConfig: (approvalArgs?: string[], compatibilityArgs?: string[]) => Promise<unknown> | unknown;
     readOpenCodeConfig: (permissionOverride?: string) => Promise<unknown> | unknown;
     isTTY: () => boolean;
     confirm: (message: string) => Promise<string>;

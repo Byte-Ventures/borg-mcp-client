@@ -508,7 +508,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
             }
         }, () => process.stdin.isTTY === true)),
         setCliPreferenceForWorktree: (cli, worktree) => setProjectCliPreference(cli, worktree),
-        prepareCodexRemoteLaunch: () => prepareCodexRemoteLaunch(defaultCodexRemoteDeps()),
+        prepareCodexRemoteLaunch: (options) => prepareCodexRemoteLaunch(defaultCodexRemoteDeps(options)),
     };
 }
 //# sourceMappingURL=assimilate-deps.js.map

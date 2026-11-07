@@ -127,6 +127,24 @@ describe('codex launch helpers', () => {
     }
   });
 
+  it.each([{ tail: [] }, { tail: ['--', 'user prompt'] }])('places name compatibility after user config and before the option terminator: %j', ({ tail }) => {
+    const result = buildCodexLaunchArgs({
+      remote: { ready: true, args: ['--remote', 'unix:///tmp/codex.sock'],
+        server: { socketPath: '/tmp/codex.sock' } } as any,
+      cwd: '/repo', kickoff: 'kickoff',
+      approvalArgs: ['-c', 'approval-override'],
+      passthroughArgs: ['-c', 'user-config', ...tail],
+      compatibilityArgs: ['-c', 'equivalent-names'],
+    });
+    expect(result.ready).toBe(true);
+    if (!result.ready) throw new Error(result.reason);
+    expect(result.args.indexOf('approval-override')).toBeLessThan(result.args.indexOf('user-config'));
+    expect(result.args.indexOf('user-config')).toBeLessThan(result.args.indexOf('equivalent-names'));
+    if (tail.length) expect(result.args.indexOf('equivalent-names')).toBeLessThan(result.args.indexOf('--'));
+    const source = readFileSync(new URL('../src/claude.ts', import.meta.url), 'utf8');
+    expect(source).toContain('compatibilityArgs: launchApproval.codexCompatibilityArgs');
+  });
+
   it.each([
     ['--remote', 'unix:///tmp/caller.sock'],
     ['--remote=unix:///tmp/caller.sock'],
