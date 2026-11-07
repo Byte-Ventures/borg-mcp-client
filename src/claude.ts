@@ -711,7 +711,10 @@ async function main() {
       return;
     }
     console.error(`${consolePrefix()}${chalk.gray('◼ Starting Codex remote-wake app-server…')}`);
-    codexRemote = await prepareCodexRemoteLaunch(defaultCodexRemoteDeps());
+    codexRemote = await prepareCodexRemoteLaunch(defaultCodexRemoteDeps({
+      cwd: approvalCwd,
+      configArgs: [...launchApproval.codexArgs, ...(launchApproval.codexCompatibilityArgs ?? [])],
+    }));
     if (!codexRemote.ready) {
       const stderr = codexRemote.stderr ? `\n${codexRemote.stderr}` : '';
       console.error(`${consolePrefix()}${chalk.red(`Codex launch refused: ${codexRemote.reason}${stderr}`)}`);
@@ -741,6 +744,7 @@ async function main() {
       cwd: process.cwd(),
       kickoff,
       approvalArgs: launchApproval.codexArgs,
+      compatibilityArgs: launchApproval.codexCompatibilityArgs,
       seatExpectationArgs: codexLaunchSeatExpectationConfigArgs(),
       passthroughArgs,
     });

@@ -7,8 +7,20 @@ unchanged. This catalog change requires a client major release.
 
 ## Before upgrading
 
-1. Keep each legacy rule and add its canonical counterpart in tool-specific
-   allow, ask and deny rules, enabled/disabled tool lists, agent policies and
+When Borg launches Codex, exact-name policies are handled automatically.
+Borg adds the missing canonical or legacy counterpart to per-tool settings and
+enabled/disabled lists for that launch, preserving the existing settings. It
+verifies the result with Codex and leaves your saved configuration untouched.
+The private Codex server also receives and verifies the resolved Borg policy,
+including server enablement, default approvals and enabled/disabled lists,
+whether or not any tool name changes.
+This also works with `--no-borg-approval-override`: name compatibility is separate
+from Borg's existing coordination approval override. Conflicting counterpart
+settings and patterns that cover only one spelling still require review.
+For Codex sessions launched without Borg, update the saved policies yourself.
+
+1. For Claude and OpenCode, keep each legacy rule and add its canonical counterpart
+   in tool-specific allow, ask and deny rules, enabled/disabled tool lists, agent policies and
    managed policies. Both entries must have the same action and resource scope.
    OpenCode rules are ordered: keep each pair adjacent and preserve its position
    relative to other rules. Codex tables and Claude selector sets are unordered.
@@ -55,9 +67,10 @@ definitions stop launch; remote-only plugins must be installed locally first.
 Codex uses its native effective configuration and selected profile. OpenCode 1
 uses its effective config, and OpenCode 2 checks native config sources, effective
 agent rules and session rules before updating session permissions. An exact
-selector without an equivalent counterpart, or a glob whose match changes
-between spellings, stops launch with migration instructions. Ordered OpenCode
-rules also require adjacency.
+selector without an equivalent counterpart stops Claude or OpenCode launch;
+Codex adds equivalent exact-name counterparts for the launch. A conflicting
+pair, or a glob whose match changes between spellings, stops launch with migration
+instructions. Ordered OpenCode rules also require adjacency.
 Unavailable effective configuration also stops launch. The approval opt-out flag
 `--no-borg-approval-override` does not bypass migration checks. Borg does not edit
 these settings or automatically translate policy globs. Its own launch-only

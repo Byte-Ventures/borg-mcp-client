@@ -27,6 +27,7 @@ export declare function buildCodexLaunchArgs(options: {
     cwd: string;
     kickoff: string;
     approvalArgs?: string[];
+    compatibilityArgs?: string[];
     accessArgs?: string[];
     seatExpectationArgs?: string[];
     passthroughArgs?: string[];

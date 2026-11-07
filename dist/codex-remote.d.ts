@@ -114,6 +114,10 @@ export declare function checkCodexBridgeHealthy(socketPath: string | null, deps?
  * one retry. The caller MUST call `result.server.cleanup()` on TUI exit.
  */
 export declare function prepareCodexRemoteLaunch(deps: PrepareCodexRemoteDeps): Promise<CodexRemoteLaunch>;
+export interface CodexRemoteConfigOptions {
+    configArgs?: string[];
+    cwd?: string;
+}
 /**
  * Production deps for prepareCodexRemoteLaunch — spawn the real `codex
  * app-server` child + probe it with the real CodexAppServerClient. Shared by
@@ -125,5 +129,5 @@ export declare function prepareCodexRemoteLaunch(deps: PrepareCodexRemoteDeps): 
  * invariant; the app-server socket is the wake-DELIVERY wire, not a liveness
  * signal).
  */
-export declare function defaultCodexRemoteDeps(): Pick<PrepareCodexRemoteDeps, 'spawnAppServer' | 'probeReady' | 'sleep'>;
+export declare function defaultCodexRemoteDeps(options?: CodexRemoteConfigOptions): Pick<PrepareCodexRemoteDeps, 'spawnAppServer' | 'probeReady' | 'sleep'>;
 //# sourceMappingURL=codex-remote.d.ts.map

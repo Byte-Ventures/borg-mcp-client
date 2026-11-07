@@ -90,7 +90,7 @@ describe('host-side policy migration', () => {
   it('fails before overrides and cannot be bypassed with --no-borg-approval-override', async () => {
     for (const skipOverride of [false, true]) {
       let reads = 0;
-      const io = { readCodexConfig: () => { reads++; return { mcp_servers: { borg: { disabled_tools: ['borg_read-log'] } } }; },
+      const io = { readCodexConfig: () => { reads++; return { mcp_servers: { borg: { disabled_tools: ['borg_read-*'] } } }; },
         readOpenCodeConfig: () => ({}), confirm: async () => 'yes', isTTY: () => true };
       await expect(resolveLaunchBorgApprovals('codex', io, { skipOverride })).rejects.toThrow(ToolNameMigrationError);
       expect(reads).toBe(1);

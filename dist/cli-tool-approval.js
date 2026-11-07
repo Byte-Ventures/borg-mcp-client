@@ -2,8 +2,10 @@ import { spawn, spawnSync } from 'node:child_process';
 import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from './guarded-fs.js';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { borgHomeRoot } from './private-root.js';
 import { assertToolNamePoliciesMigrated, ToolNameMigrationError, toolPolicySpellings } from './tool-name-migration.js';
+import { LEGACY_TOOL_ALIASES } from './tool-names.js';
 import { claudeToolPolicyArgs, readClaudeEffectiveSettings } from './claude-effective-settings.js';
 import { inspectClaudePolicySources } from './claude-policy-sources.js';
 /**
@@ -74,7 +76,7 @@ export function inspectCodexBorgApprovals(config) {
         ? { tools: Object.fromEntries(parseCodexModes(config).toolModes),
             ...Object.fromEntries([...config.matchAll(/\b(enabled_tools|disabled_tools)\s*=\s*\[([^\]]*)\]/g)]
                 .map(([, key, list]) => [key, [...list.matchAll(/["']([^"']*)["']/g)].map(([, name]) => name)])) }
-        : borgConfigFragment(config);
+        : codexToolPolicyFragment(config);
     assertToolNamePoliciesMigrated('codex', { tools: policy });
     let defaultMode;
     let toolModes = new Map();
@@ -162,18 +164,18 @@ export function inspectOpenCodeBorgApprovals(config) {
         repairSnippet: JSON.stringify({ permission: mergeOpenCodePermission(permission, restrictiveTools.length > 0 ? restrictiveTools : OPENCODE_BORG_COORDINATION_TOOLS) }, null, 2),
     };
 }
-export function codexBorgApprovalArgs(tools = CODEX_BORG_COORDINATION_TOOLS) {
+export function codexBorgApprovalArgs(tools = CODEX_BORG_COORDINATION_TOOLS, existingTools = {}) {
     if (tools.length === 0)
         return [];
     // Codex's dotted CLI override parser treats quotes in a segment literally,
     // so `tools."borg:regen"` creates the wrong key. An inline TOML table is the
     // supported way to address colon-named tools and deep-merges with the
     // remaining effective tool config.
-    const toolTable = tools
-        .flatMap(tool => toolPolicySpellings('codex', tool))
-        .map((tool) => `${JSON.stringify(tool)}={approval_mode="auto"}`)
-        .join(',');
-    return ['-c', `mcp_servers.borg.tools={${toolTable}}`];
+    const toolTable = { ...existingTools };
+    for (const tool of tools.flatMap(tool => toolPolicySpellings('codex', tool))) {
+        toolTable[tool] = { ...(isRecord(toolTable[tool]) ? toolTable[tool] : {}), approval_mode: 'auto' };
+    }
+    return ['-c', `mcp_servers.borg.tools=${codexConfigValue(toolTable)}`];
 }
 /** Keep only flags that app-server supports and that participate in config
  * resolution. Runtime-only --profile/-p is resolved separately because Codex
@@ -251,6 +253,97 @@ function borgConfigFragment(config) {
         return {};
     const borg = config.mcp_servers.borg;
     return isRecord(borg) ? borg : {};
+}
+const CODEX_TOOL_POLICY_FIELDS = ['tools', 'enabled_tools', 'disabled_tools'];
+const CODEX_POLICY_FIELDS = ['enabled', 'default_tools_approval_mode', ...CODEX_TOOL_POLICY_FIELDS];
+function codexToolPolicyFragment(config) {
+    const borg = borgConfigFragment(config);
+    return isRecord(borg) ? Object.fromEntries(CODEX_TOOL_POLICY_FIELDS
+        .filter(key => Object.hasOwn(borg, key)).map(key => [key, borg[key]])) : {};
+}
+function codexPolicyFragment(config) {
+    const borg = borgConfigFragment(config);
+    if (!isRecord(borg) || Object.keys(borg).length === 0)
+        return {};
+    // Native config/read materializes enabled=true, while selected profiles are
+    // composed from raw layers that may omit this default.
+    const policy = { enabled: true, ...Object.fromEntries(CODEX_POLICY_FIELDS
+            .filter(key => Object.hasOwn(borg, key)).map(key => [key, borg[key]])) };
+    // Native config/read omits an empty tools table. Empty allow/deny lists,
+    // especially enabled_tools=[], have distinct meaning and must be retained.
+    if (isRecord(policy.tools) && Object.keys(policy.tools).length === 0)
+        delete policy.tools;
+    return policy;
+}
+/** Values from native config/read are data, never executable TOML fragments. */
+function codexConfigValue(value) {
+    if (typeof value === 'string' || typeof value === 'boolean' ||
+        (typeof value === 'number' && Number.isFinite(value)))
+        return JSON.stringify(value);
+    if (Array.isArray(value))
+        return `[${value.map(codexConfigValue).join(',')}]`;
+    if (isRecord(value))
+        return `{${Object.entries(value)
+            .map(([key, entry]) => `${/^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key)}=${codexConfigValue(entry)}`).join(',')}}`;
+    throw new ToolNameMigrationError('codex', 'a tool policy value could not be preserved in launch configuration.');
+}
+/** The MCP-owning server must get the resolved policy even without a rename.
+ * Verify its actual config sources, rather than re-reading the TUI profile. */
+async function finalizeCodexLaunchDecision(decision, config, io) {
+    try {
+        if (!isRecord(config))
+            throw new Error('Native config was unavailable');
+        const policy = codexPolicyFragment(config);
+        const args = Object.entries(policy).flatMap(([key, value]) => ['-c', `mcp_servers.borg.${key}=${codexConfigValue(value)}`]);
+        const owner = await io.readCodexServerConfig([...decision.codexArgs, ...args]);
+        if (!isRecord(owner) || !isDeepStrictEqual(codexPolicyFragment(owner), policy)) {
+            throw new Error('Owner policy differs');
+        }
+        return { ...decision, ...(args.length ? { codexCompatibilityArgs: args } : {}) };
+    }
+    catch {
+        throw new ToolNameMigrationError('codex', 'could not preserve the effective Borg policy on the private app-server.');
+    }
+}
+/** Complete exact-name policies in memory. Globs and conflicting pairs still
+ * require review; no operator config file is rewritten. */
+function codexToolNameCompatibility(config) {
+    if (!isRecord(config))
+        return { config, args: [] };
+    const completed = structuredClone(config);
+    const borg = borgConfigFragment(completed);
+    if (!isRecord(borg))
+        return { config, args: [] };
+    const original = codexToolPolicyFragment(config);
+    for (const raw of Object.values(LEGACY_TOOL_ALIASES)) {
+        for (const canonical of [raw, `borg:${raw.slice(5)}`, raw.slice(5)]) {
+            const [, legacy] = toolPolicySpellings('codex', canonical);
+            if (isRecord(borg.tools)) {
+                for (const [name, other] of [[canonical, legacy], [legacy, canonical]]) {
+                    if (Object.hasOwn(borg.tools, name) && !Object.hasOwn(borg.tools, other)) {
+                        borg.tools[other] = structuredClone(borg.tools[name]);
+                    }
+                }
+            }
+            for (const field of ['enabled_tools', 'disabled_tools']) {
+                const names = borg[field];
+                if (!Array.isArray(names))
+                    continue;
+                if (names.includes(canonical) && !names.includes(legacy))
+                    names.push(legacy);
+                if (names.includes(legacy) && !names.includes(canonical))
+                    names.push(canonical);
+            }
+        }
+    }
+    const policy = codexToolPolicyFragment(completed);
+    assertToolNamePoliciesMigrated('codex', { tools: policy });
+    // Verify exact-name completion in the selected config before considering
+    // the separate approval override. Finalization transfers the server policy.
+    const changed = CODEX_TOOL_POLICY_FIELDS.some(key => !isDeepStrictEqual(original[key], policy[key]));
+    const args = (changed ? CODEX_TOOL_POLICY_FIELDS.filter(key => Object.hasOwn(policy, key)) : [])
+        .flatMap(key => ['-c', `mcp_servers.borg.${key}=${codexConfigValue(policy[key])}`]);
+    return { config: completed, args };
 }
 /** Rebuild the native ordered layer stack with the selected profile inserted
  * immediately above the base user layer, matching Codex's runtime loader. */
@@ -439,7 +532,7 @@ export async function readCodexEffectiveConfig(args, cwd, env, runtime = {}) {
     const snapshot = await readCodexConfigSnapshot(args, cwd, env, runtime);
     for (const layer of snapshot.layers ?? []) {
         if (!layer.disabledReason)
-            assertToolNamePoliciesMigrated('codex', { tools: borgConfigFragment(layer.config) });
+            codexToolNameCompatibility(layer.config);
     }
     if (!runtime.profile)
         return snapshot.config ?? null;
@@ -475,12 +568,13 @@ export function defaultApprovalIo(confirm, isTTY, options = {}) {
             inspectClaudePolicySources(args, cwd, env, settings);
             return settings;
         },
-        readCodexConfig: (approvalArgs = []) => {
-            const args = [...approvalArgs, ...selectedCodexArgs];
+        readCodexConfig: (approvalArgs = [], compatibilityArgs = []) => {
+            const args = [...approvalArgs, ...selectedCodexArgs, ...compatibilityArgs];
             return selectedCodexProfile === undefined
                 ? loadCodex(args, cwd, env)
                 : loadCodex(args, cwd, env, selectedCodexProfile);
         },
+        readCodexServerConfig: (args) => loadCodex(args, cwd, env),
         readOpenCodeConfig: (permissionOverride) => loadOpenCode(cwd, {
             ...env,
             ...(permissionOverride === undefined
@@ -507,12 +601,24 @@ export async function resolveLaunchBorgApprovals(cli, io, options = {}) {
     }
     let inspection;
     let openCodeConfig;
+    let codexConfig;
+    let codexCompatibilityArgs = [];
     try {
         if (cli === 'codex') {
             const config = await io.readCodexConfig();
             if (config === null || config === undefined)
                 throw new Error('Effective config unavailable');
-            inspection = inspectCodexBorgApprovals(config);
+            const compatible = codexToolNameCompatibility(config);
+            codexConfig = compatible.config;
+            codexCompatibilityArgs = compatible.args;
+            if (codexCompatibilityArgs.length > 0) {
+                const verified = await io.readCodexConfig([], codexCompatibilityArgs);
+                if (!isDeepStrictEqual(codexToolPolicyFragment(verified), codexToolPolicyFragment(codexConfig))) {
+                    throw new ToolNameMigrationError('codex', 'the installed CLI did not preserve the equivalent tool policies in launch configuration.');
+                }
+                codexConfig = verified;
+            }
+            inspection = inspectCodexBorgApprovals(codexConfig);
         }
         else {
             openCodeConfig = await io.readOpenCodeConfig();
@@ -526,38 +632,54 @@ export async function resolveLaunchBorgApprovals(cli, io, options = {}) {
             throw error;
         throw new ToolNameMigrationError(cli, 'could not verify effective tool policies with the installed CLI.');
     }
-    if (inspection.restrictiveTools.length === 0)
-        return { codexArgs: [] };
+    const compatibility = codexCompatibilityArgs.length ? { codexCompatibilityArgs } : {};
+    if (inspection.restrictiveTools.length === 0) {
+        const decision = { codexArgs: [], ...compatibility };
+        return cli === 'codex' ? finalizeCodexLaunchDecision(decision, codexConfig, io) : decision;
+    }
     const intro = `${cli === 'codex' ? 'Codex' : 'OpenCode'} requires approval for ${inspection.restrictiveTools.length} Borg tool${inspection.restrictiveTools.length === 1 ? '' : 's'}. ` +
         BORG_DISPATCHER_APPROVAL_DISCLOSURE;
     if (options.skipOverride) {
-        return {
-            codexArgs: [],
+        const decision = {
+            codexArgs: [], ...compatibility,
             warning: `${intro} Continuing without the launch-only fix because --no-borg-approval-override was supplied. To repair it globally, add:\n${inspection.repairSnippet}`,
         };
+        return cli === 'codex' ? finalizeCodexLaunchDecision(decision, codexConfig, io) : decision;
     }
     if (cli === 'codex') {
-        const codexArgs = codexBorgApprovalArgs(inspection.restrictiveTools);
+        const existing = borgConfigFragment(codexConfig);
+        const codexArgs = codexBorgApprovalArgs(inspection.restrictiveTools, isRecord(existing) && isRecord(existing.tools) ? existing.tools : {});
+        // The approval table already contains all completed tool settings. Keep
+        // list compatibility after user flags, but let explicit CLI approvals win.
+        const listCompatibilityArgs = [];
+        for (let index = 0; index < codexCompatibilityArgs.length; index += 2) {
+            if (!codexCompatibilityArgs[index + 1].startsWith('mcp_servers.borg.tools=')) {
+                listCompatibilityArgs.push(...codexCompatibilityArgs.slice(index, index + 2));
+            }
+        }
         let effectiveWithOverride;
+        let configWithOverride;
         try {
-            effectiveWithOverride = inspectCodexBorgApprovals(await io.readCodexConfig(codexArgs));
+            configWithOverride = await io.readCodexConfig(codexArgs, listCompatibilityArgs);
+            effectiveWithOverride = inspectCodexBorgApprovals(configWithOverride);
         }
         catch {
-            return {
-                codexArgs: [],
+            return finalizeCodexLaunchDecision({
+                codexArgs: [], ...compatibility,
                 warning: 'Could not verify the Codex launch-only approval override against effective config. No override was applied.',
-            };
+            }, codexConfig, io);
         }
         if (effectiveWithOverride.restrictiveTools.length > 0) {
-            return {
-                codexArgs: [],
+            return finalizeCodexLaunchDecision({
+                codexArgs: [], ...compatibility,
                 warning: `Codex managed policy prevents the launch-only Borg approval override. Ask your Codex administrator to allow these tools:\n${effectiveWithOverride.repairSnippet}`,
-            };
+            }, codexConfig, io);
         }
-        return {
+        return finalizeCodexLaunchDecision({
             codexArgs,
+            ...(listCompatibilityArgs.length ? { codexCompatibilityArgs: listCompatibilityArgs } : {}),
             warning: `${intro} Applied a launch-only approval override. Pass --no-borg-approval-override to opt out.`,
-        };
+        }, configWithOverride, io);
     }
     const openCodePermission = JSON.stringify(mergeOpenCodePermission(openCodeConfig && typeof openCodeConfig === 'object'
         ? openCodeConfig.permission
@@ -593,7 +715,7 @@ export async function setupApprovalWarnings(deps, selected = { codex: true, open
     const warnings = [];
     try {
         const codex = selected.codex
-            ? inspectCodexBorgApprovals(await deps.readCodexConfig())
+            ? inspectCodexBorgApprovals(codexToolNameCompatibility(await deps.readCodexConfig()).config)
             : null;
         if (codex && codex.restrictiveTools.length > 0) {
             warnings.push(`Codex Borg approvals are restrictive. ${BORG_DISPATCHER_APPROVAL_DISCLOSURE} Borg launches will offer a launch-only fix. Global repair:\n${codex.repairSnippet}`);

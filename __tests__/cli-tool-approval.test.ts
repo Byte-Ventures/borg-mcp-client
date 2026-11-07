@@ -29,7 +29,8 @@ function codexEffective(mode: 'auto' | 'approve') {
 
 function io(overrides: Partial<Parameters<typeof resolveLaunchBorgApprovals>[1]> = {}) {
   return {
-    readCodexConfig: () => '',
+    readCodexConfig: () => ({}),
+    readCodexServerConfig: (args: string[]) => overrides.readCodexConfig?.(args) ?? {},
     readOpenCodeConfig: () => ({}),
     readClaudeConfig: () => ({ effective: {}, sources: [] }),
     isTTY: () => true,
@@ -287,7 +288,7 @@ describe('launch approval', () => {
       isTTY: () => false,
       readCodexConfig: (approvalArgs = []) => approvalArgs.length > 0
         ? codexEffective('auto')
-        : '[mcp_servers.borg]\ndefault_tools_approval_mode = "approve"',
+        : codexEffective('approve'),
     });
     const result = await resolveLaunchBorgApprovals('codex', deps);
     expect(result.codexArgs).toHaveLength(2);
@@ -298,7 +299,7 @@ describe('launch approval', () => {
 
   it('opts out without prompting or overriding and emits exact repair copy', async () => {
     const deps = io({
-      readCodexConfig: () => '[mcp_servers.borg]\ndefault_tools_approval_mode = "approve"',
+      readCodexConfig: () => codexEffective('approve'),
     });
     const result = await resolveLaunchBorgApprovals('codex', deps, { skipOverride: true });
     expect(result.codexArgs).toEqual([]);
@@ -370,7 +371,6 @@ describe('launch approval', () => {
 
   it('detects a restrictive selected profile and verifies the launch-only override in the same profile', async () => {
     const loadCodex = vi.fn(async (args: string[], _cwd: string, _env: NodeJS.ProcessEnv, profile?: string) => {
-      expect(profile).toBe('team');
       return args.some((arg) => arg.includes('approval_mode="auto"'))
         ? codexEffective('auto')
         : codexEffective('approve');
@@ -383,8 +383,10 @@ describe('launch approval', () => {
     });
     const result = await resolveLaunchBorgApprovals('codex', approvalIo);
     expect(result.codexArgs).toHaveLength(2);
-    expect(loadCodex).toHaveBeenCalledTimes(2);
-    expect(loadCodex.mock.calls.every((call) => call[3] === 'team')).toBe(true);
+    expect(loadCodex).toHaveBeenCalledTimes(3);
+    expect(loadCodex.mock.calls.slice(0, 2).every((call) => call[3] === 'team')).toBe(true);
+    expect(loadCodex.mock.calls[2][3]).toBeUndefined();
+    expect(loadCodex.mock.calls[2][0]).toEqual([...result.codexArgs, ...result.codexCompatibilityArgs!]);
   });
 
   it('inspects the explicit restrictive Codex project instead of a clean wrapper cwd', async () => {
@@ -417,7 +419,9 @@ describe('launch approval', () => {
       codexArgs: [`-C=${targetCwd}`],
       loadCodex,
     });
-    expect(await resolveLaunchBorgApprovals('codex', approvalIo)).toEqual({ codexArgs: [] });
+    const result = await resolveLaunchBorgApprovals('codex', approvalIo);
+    expect(result.codexArgs).toEqual([]);
+    expect(result.codexCompatibilityArgs).toContain('mcp_servers.borg.default_tools_approval_mode="auto"');
     expect(loadCodex).toHaveBeenCalledWith([], targetCwd, {});
     expect(confirm).not.toHaveBeenCalled();
   });

@@ -396,6 +396,11 @@ export async function prepareCodexRemoteLaunch(
   return lastRefusal;
 }
 
+export interface CodexRemoteConfigOptions {
+  configArgs?: string[];
+  cwd?: string;
+}
+
 /**
  * Production deps for prepareCodexRemoteLaunch — spawn the real `codex
  * app-server` child + probe it with the real CodexAppServerClient. Shared by
@@ -407,7 +412,7 @@ export async function prepareCodexRemoteLaunch(
  * invariant; the app-server socket is the wake-DELIVERY wire, not a liveness
  * signal).
  */
-export function defaultCodexRemoteDeps(): Pick<
+export function defaultCodexRemoteDeps(options: CodexRemoteConfigOptions = {}): Pick<
   PrepareCodexRemoteDeps,
   'spawnAppServer' | 'probeReady' | 'sleep'
 > {
@@ -433,6 +438,7 @@ export function defaultCodexRemoteDeps(): Pick<
         'codex',
         [
           'app-server',
+          ...(options.configArgs ?? []),
           ...codexBorgSessionConfigArgs(),
           ...codexAgentKindConfigArgs(),
           ...codexRemoteWakeConfigArgs(),
@@ -444,6 +450,7 @@ export function defaultCodexRemoteDeps(): Pick<
         {
           stdio: ['ignore', 'ignore', 'pipe'],
           shell: false,
+          ...(options.cwd ? { cwd: options.cwd } : {}),
           env: {
             ...process.env,
             [BORG_SESSION_ENV]: '1',
