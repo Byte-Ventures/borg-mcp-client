@@ -23,6 +23,8 @@ const nativeRequests = [];
 let nativePlugins;
 let nativeOrigin;
 let nativeHeaders;
+let losePromptResponse = false;
+let lostPromptResponses = 0;
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const pathname = new URL(typeof input === 'string' || input instanceof URL ? input : input.url).pathname;
@@ -30,6 +32,11 @@ globalThis.fetch = async (input, init) => {
   try {
     const response = await originalFetch(input, init);
     nativeRequests.push({ pathname, status: response.status, milliseconds: Date.now() - started });
+    if (losePromptResponse && /\/api\/session\/[^/]+\/prompt$/.test(pathname) && response.ok) {
+      losePromptResponse = false; lostPromptResponses++;
+      await response.arrayBuffer();
+      throw new Error('Fixture lost native response after admission');
+    }
     if (pathname === '/api/info' && response.ok) {
       nativeOrigin = new URL(typeof input === 'string' || input instanceof URL ? input : input.url).origin;
       nativeHeaders = init?.headers;
@@ -56,11 +63,31 @@ let handoffIssued = false;
 let discoveredPaths = [];
 let audienceRequested = false;
 let audienceIssued = false;
+let failNextGeneration = false;
+let holdNextGeneration = false;
+let releaseGeneration;
 const direct = process.env.OPENCODE_TEST_DIRECT === '1';
 const pluginDelayMs = Number(process.env.OPENCODE_TEST_PLUGIN_DELAY_MS ?? 0);
 assert.ok(Number.isInteger(pluginDelayMs) && pluginDelayMs >= 0 && pluginDelayMs < 60_000, 'Invalid fixture plugin delay');
 const callsPath = join(root, 'mcp-calls.jsonl');
 const environmentPath = join(root, 'mcp-environment.jsonl');
+function assertMaterializedWake(rows, nonTargetRows, delivery, text) {
+  const matches = rows.filter(row => row.type === 'user' && row.text === text);
+  assert.equal(matches.length, 1, 'One materialized user input, not merely an HTTP admission');
+  assert.equal(matches[0].id, delivery.id);
+  assert.equal(matches[0].metadata?.borgOpenCodeWakeIdentity, delivery.id);
+  assert.ok(!nonTargetRows.some(row => row.type === 'user' && row.text === text), 'Wake does not reach the non-target session');
+}
+function checkMaterializationControls(rows, nonTargetRows, delivery, text) {
+  assertMaterializedWake(rows, nonTargetRows, delivery, text);
+  const message = rows.find(row => row.id === delivery.id);
+  // Corrupt actual host observations, not expected outputs: every check must
+  // reject loss, duplication, missing identity, and a wrong-target copy.
+  assert.throws(() => assertMaterializedWake(rows.filter(row => row.id !== delivery.id), nonTargetRows, delivery, text));
+  assert.throws(() => assertMaterializedWake([...rows, message], nonTargetRows, delivery, text));
+  assert.throws(() => assertMaterializedWake(rows.map(row => row.id === delivery.id ? { ...row, metadata: {} } : row), nonTargetRows, delivery, text));
+  assert.throws(() => assertMaterializedWake(rows, [...nonTargetRows, message], delivery, text));
+}
 const valuePath = join(root, 'inline-value.txt'); writeFileSync(valuePath, 'native-file-expanded');
 const plugin = join(root, 'fixture-plugin'); mkdirSync(plugin);
 writeFileSync(join(plugin, 'index.js'), `export default {id:'borg.native-fixture.tools',async setup(ctx){
@@ -79,6 +106,17 @@ const provider = createServer(async (req, res) => {
   configuredProviderCredential &&= req.headers.authorization === 'Bearer fixture';
   let input = ''; for await (const chunk of req) input += chunk;
   const body = JSON.parse(input); requests.push(body);
+  if (failNextGeneration) {
+    failNextGeneration = false;
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'Fixture asynchronous processing failure', type: 'invalid_request_error' } }));
+    return;
+  }
+  if (holdNextGeneration) {
+    holdNextGeneration = false;
+    await new Promise(resolve => { releaseGeneration = resolve; });
+    releaseGeneration = undefined;
+  }
   const system = body.messages.filter(message => message.role === 'system').map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n');
   for (const message of body.messages.filter(message=>message.role==='tool')) {
     try { const value = JSON.parse(message.content); for (const catalog of [value, value.borg, value.shell]) if (Array.isArray(catalog?.items)) discoveredPaths.push(...catalog.items.map(item=>item.path)); } catch {}
@@ -150,6 +188,7 @@ try {
   const { readOpenCodeV2Descriptor, readOpenCodeV2PluginDescriptor, callOpenCodeV2Broker } = await import('../../dist/opencode-v2-broker.js');
   const { openCodePrivateRoot } = await import('../../dist/opencode-private-state.js');
   let nativeClient;
+  let recoveryBystander;
   let nativeRootHeaders;
   let nativeRootURL;
   const env = { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, BORG_STATE_ROOT: root,
@@ -238,6 +277,97 @@ try {
     assert.ok(logged, 'Actual Borg MCP persisted a log after the native nested audit nudge');
   }
   assert.ok(!(await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('Heads up:'));
+  if (realSeat) {
+    // Failure injection belongs only to the existing CI-only isolated fleet.
+    // Admission, materialization and model outcome are separate observations.
+    const sessionID = descriptor.sessionID;
+    const until = async (check, label) => {
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        if (await check()) return;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      throw new Error(`Wake recovery timed out: ${label}`);
+    };
+    const inbox = () => nativeClient.session.inbox.list({ sessionID });
+    const messages = async () => (await nativeClient.message.list({ sessionID, limit: 100 })).data;
+    const bystander = await nativeClient.session.create({ location: { directory }, title: 'Wake recovery non-target' });
+    recoveryBystander = bystander.id;
+    const wakeInput = (key, source, text, resume = true) => ({ key, source, text, resume });
+    const proof = async (delivery, text) => {
+      const rows = await messages();
+      const nonTargetRows = (await nativeClient.message.list({ sessionID: bystander.id, limit: 100 })).data;
+      checkMaterializationControls(rows, nonTargetRows, delivery, text);
+    };
+    const lostText = 'Recovery response-lost input';
+    losePromptResponse = true;
+    const lost = await callOpenCodeV2Broker(descriptor, '/wake', wakeInput('lost-1', 'recovery-lost', lostText, false));
+    assert.equal(lostPromptResponses, 1, 'Lost response control actually crossed native admission');
+    assert.equal(lost.accepted, true);
+    assert.equal(lost.delivered, false, 'Queued admission is not materialized input');
+    const repeats = await Promise.all(['lost-2', 'lost-3'].map(key => callOpenCodeV2Broker(descriptor, '/wake', wakeInput(key, 'recovery-lost', lostText, false))));
+    assert.ok(repeats.every(row => row.id === lost.id));
+    const queued = (await inbox()).filter(row => row.id === lost.id);
+    assert.equal(queued.length, 1, 'Concurrent retries retain exactly one native inbox item');
+    assert.equal(queued[0].payload.metadata.borgOpenCodeWakeIdentity, lost.id);
+    const rebound = await callOpenCodeV2Broker(descriptor, '/bind', { seat: descriptor.seat });
+    assert.equal(rebound.sessionID, sessionID, 'MCP reconnect preserves target');
+
+    // A blocked provider makes busy-session admission observable without sleeps
+    // or assuming that steer inputs have FIFO model-processing semantics.
+    holdNextGeneration = true;
+    const busy = await callOpenCodeV2Broker(descriptor, '/wake', wakeInput('busy', 'recovery-busy', 'Recovery busy anchor'));
+    await until(() => releaseGeneration, 'provider is processing the busy anchor');
+    const burst = await Promise.all([0, 1, 2].map(index => callOpenCodeV2Broker(descriptor, '/wake',
+      wakeInput(`burst-${index}`, `recovery-burst-${index}`, `Recovery burst ${index}`))));
+    assert.ok(burst.every(row => row.accepted));
+    assert.equal(new Set(burst.map(row => row.id)).size, 3);
+    const replay = await callOpenCodeV2Broker(descriptor, '/wake', wakeInput('burst-reconnect', 'recovery-burst-1', 'Recovery burst 1'));
+    assert.equal(replay.id, burst[1].id);
+    const busyInbox = await inbox();
+    const burstHostState = [];
+    for (const delivery of burst) {
+      const queued = busyInbox.filter(row => row.id === delivery.id);
+      let message;
+      try { message = await nativeClient.session.message.get({ sessionID, messageID: delivery.id }); } catch {}
+      assert.ok(queued.some(row => row.payload.metadata?.borgOpenCodeWakeIdentity === delivery.id) ||
+        (message?.type === 'user' && message.metadata?.borgOpenCodeWakeIdentity === delivery.id),
+      'Busy admission must have matching native inbox/message evidence');
+      burstHostState.push({ id: delivery.id, inboxCount: queued.length, materialized: message?.type === 'user' });
+    }
+    releaseGeneration();
+    await nativeClient.session.wait({ sessionID }, { signal: AbortSignal.timeout(15_000) });
+    await proof(lost, lostText);
+    await proof(busy, 'Recovery busy anchor');
+    for (const [index, delivery] of burst.entries()) await proof(delivery, `Recovery burst ${index}`);
+    const observedOrder = (await messages()).filter(row => burst.some(delivery => delivery.id === row.id)).map(row => row.id);
+    assert.equal(observedOrder.length, burst.length);
+    const confirmed = await callOpenCodeV2Broker(descriptor, '/wake', { ...wakeInput('lost-confirm', 'recovery-lost', lostText), allowSubmit: false });
+    assert.equal(confirmed.delivered, true);
+
+    failNextGeneration = true;
+    const failedText = 'Recovery processing-failure input';
+    const beforeFailure = new Set((await messages()).map(row => row.id));
+    const failed = await callOpenCodeV2Broker(descriptor, '/wake', wakeInput('processing-failure', 'recovery-processing-failure', failedText));
+    assert.equal(failed.accepted, true);
+    await nativeClient.session.wait({ sessionID }, { signal: AbortSignal.timeout(15_000) });
+    assert.equal(failNextGeneration, false, 'Failure control reached the provider');
+    await proof(failed, failedText);
+    const outcome = await messages();
+    const failureRows = outcome.filter(row => !beforeFailure.has(row.id));
+    const assertProcessingFailure = rows => assert.ok(rows.some(row => row.type === 'assistant' && row.error),
+      'Native history records asynchronous processing failure');
+    assertProcessingFailure(failureRows);
+    assert.throws(() => assertProcessingFailure(failureRows.map(({ error: _error, ...row }) => row)),
+      'An admission or successful response cannot satisfy the processing-failure check');
+    const failedDelivery = await callOpenCodeV2Broker(descriptor, '/wake', { ...wakeInput('failure-confirm', 'recovery-processing-failure', failedText), allowSubmit: false });
+    assert.equal(failedDelivery.delivered, true, 'Delivered input does not assert successful model work');
+    console.log(JSON.stringify({ wakeRecovery: { lostResponse: lost.id, busy: busy.id,
+      burstAdmissionOrder: burst.map(row => row.id), observedMessageOrder: observedOrder,
+      burstHostState,
+      asynchronousFailure: failed.id, processingOutcome: 'native-assistant-error', target: sessionID,
+      controls: 'loss/duplicate/identity/wrong-target/outcome rejected' } }));
+  }
   const wake = await callOpenCodeV2Broker(descriptor, '/wake', { key:'wake-fixture', text:'Local wake fixture', source:'source-fixture' });
   const duplicate = await callOpenCodeV2Broker(descriptor, '/wake', { key:'wake-fixture-reping', text:'Local wake fixture', source:'source-fixture' });
   assert.equal(duplicate.id, wake.id);
@@ -361,6 +491,40 @@ try {
     const newCalls = readFileSync(callsPath, 'utf8').trim().split('\n').slice(before).map(line => JSON.parse(line));
     assert.ok(newCalls.some(call => call.name === 'borg_read_log' && call.meta?.['ai.opencode/sessionID'] === human.id), 'First Borg call in a human-selected root receives launch policy');
   }
+  if (realSeat) {
+    // Kill only the native host created by this guarded CI fleet fixture.
+    // Existing operator hosts and the Borg authority are never targeted.
+    const sessionID = descriptor.sessionID;
+    holdNextGeneration = true;
+    const inFlight = await callOpenCodeV2Broker(descriptor, '/wake', {
+      key: 'restart-in-flight', source: 'restart-in-flight', text: 'Recovery restart in-flight',
+    });
+    const deadline = Date.now() + 10_000;
+    while (!releaseGeneration && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.ok(releaseGeneration, 'Restart control observes an active native generation');
+    const pending = await callOpenCodeV2Broker(descriptor, '/wake', {
+      key: 'restart-pending', source: 'restart-pending', text: 'Recovery restart pending', resume: false,
+    });
+    assert.equal((await nativeClient.session.inbox.list({ sessionID })).filter(row => row.id === pending.id).length, 1,
+      'Restart control observes the pending native inbox item before termination');
+    assert.equal((await nativeClient.session.message.get({ sessionID, messageID: inFlight.id })).metadata.borgOpenCodeWakeIdentity, inFlight.id);
+    process.kill(descriptor.server.pid, 'SIGKILL');
+    releaseGeneration();
+    await launch.cleanup(); launch = undefined;
+    launch = await launchOpenCodeV2Process({ ...launchOptions, passthroughArgs: ['--session', sessionID] });
+    const resumedFilename = readdirSync(openCodePrivateRoot()).find(name => /^opencode-v2-[\w-]{43}\.json$/.test(name));
+    const resumed = readOpenCodeV2Descriptor(join(openCodePrivateRoot(), resumedFilename));
+    assert.equal(resumed.sessionID, sessionID);
+    assert.notEqual(resumed.launch, descriptor.launch, 'Restart exercises a new broker generation');
+    await nativeClient.session.wait({ sessionID }, { signal: AbortSignal.timeout(15_000) });
+    const rows = (await nativeClient.message.list({ sessionID, limit: 100 })).data;
+    const nonTargetRows = (await nativeClient.message.list({ sessionID: recoveryBystander, limit: 100 })).data;
+    for (const [delivery, text] of [[inFlight, 'Recovery restart in-flight'], [pending, 'Recovery restart pending']]) {
+      checkMaterializationControls(rows, nonTargetRows, delivery, text);
+      assert.ok(!(await nativeClient.session.inbox.list({ sessionID })).some(row => row.id === delivery.id), 'Recovered input left the native inbox');
+    }
+    console.log(JSON.stringify({ wakeRestart: { sessionID, pending: pending.id, inFlight: inFlight.id, recovered: true } }));
+  }
   tui.kill(); await launch.cleanup(); launch = undefined;
   await assert.rejects(callOpenCodeV2Broker(descriptor, '/status'));
   if (!realSeat) {
@@ -403,6 +567,7 @@ try {
   console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12), nativePlugins, providerSteps: providerSteps.slice(-6) }));
   throw error;
 } finally {
+  releaseGeneration?.();
   globalThis.fetch = originalFetch;
   await launch?.cleanup(); provider.closeAllConnections(); await new Promise(resolve => provider.close(resolve)); if (!realSeat) rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 }
