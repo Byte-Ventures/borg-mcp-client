@@ -961,6 +961,7 @@ export interface LaunchInput {
   result: AssimilateResult;
   cubeDetail: CubeDetail;
   assignedRole: Role;
+  roleAutoPicked?: boolean;
   apiUrl: string;
   cli: BorgCli;
   effectiveModel: string | null;
@@ -1001,6 +1002,7 @@ export async function launchAssimilatedAgent(
     cubeDetail.name,
     useColor,
     apiUrl,
+    input.roleAutoPicked,
   ));
 
   if (!await deps.probeMcpReady()) {
@@ -2435,6 +2437,7 @@ async function runAssimilationFlow(
     result,
     cubeDetail,
     assignedRole,
+    roleAutoPicked: args.role === undefined && savedLocalRole === undefined,
     apiUrl: auth.apiUrl,
     cli: cli!,
     effectiveModel,

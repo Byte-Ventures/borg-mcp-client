@@ -15,7 +15,7 @@ import {
 } from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
 import { createServer } from 'node:net';
-import { homedir, tmpdir } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installConsumerPackages, openRealServer } from '../test/support/real-server.mjs';
@@ -120,7 +120,12 @@ export function isolatedClientEnv(homeRoot, baseEnv = process.env) {
     HOME: homeRoot,
     BORG_STATE_ROOT: homeRoot,
     CODEX_HOME: join(homeRoot, '.codex'),
+    CLAUDE_CONFIG_DIR: join(homeRoot, '.claude'),
     XDG_CONFIG_HOME: join(homeRoot, '.config'),
+    // The snapshot ignores ambient runtime writes, not harness writes. Packed
+    // client mutations still fail before I/O, including writes to those paths.
+    BORGMCP_TEST_FORBIDDEN_HOME: userInfo().homedir,
+    BORGMCP_TEST_ALLOWED_ROOTS: homeRoot,
   };
 }
 
@@ -137,9 +142,9 @@ async function hashProtectedPath(target, excludedPaths) {
       const children = [];
       for (const entry of entries) {
         const child = join(target, entry.name);
-        const digest = excludedPaths.has(child)
-          ? 'excluded-payload'
-          : await hashProtectedPath(child, excludedPaths);
+        if (excludedPaths.has(child) ||
+          (target.endsWith(`${sep}.config${sep}borgmcp`) && /^opencode-v2(?:\.db(?:-wal|-shm)?|-[A-Za-z0-9_-]+\.journal\.json)$/.test(entry.name))) continue;
+        const digest = await hashProtectedPath(child, excludedPaths);
         children.push(`${entry.name}\0${digest}`);
       }
       return `directory:${createHash('sha256').update(children.join('\n')).digest('hex')}`;
@@ -166,9 +171,8 @@ export async function snapshotOperatorConfig(homeRoot = homedir()) {
   const borgRoot = join(homeRoot, '.borg');
   const borgConfigRoot = join(homeRoot, '.config', 'borgmcp');
   // Worktrees, scratch, and live coordination/runtime state are user payload,
-  // not global configuration. Their names and presence remain covered by the
-  // parent hash, while their large or concurrently changing contents are
-  // deliberately excluded from this release-safety snapshot.
+  // not global configuration. The packed client's inherited write guard
+  // refuses operator-home writes even to these omitted runtime paths.
   const excludedPaths = new Set([
     join(borgRoot, 'scratch'),
     join(borgRoot, 'worktrees'),
@@ -182,13 +186,19 @@ export async function snapshotOperatorConfig(homeRoot = homedir()) {
     join(borgConfigRoot, 'local-attach-retries.json'),
     join(borgConfigRoot, 'local-server-cursors.json'),
   ]);
+  // Watch durable agent configuration, not session histories, caches or logs.
   const paths = [
-    join(homeRoot, '.claude.json'),
     join(homeRoot, '.claude', 'settings.json'),
+    join(homeRoot, '.claude', 'settings.local.json'),
+    join(homeRoot, '.claude', 'CLAUDE.md'),
+    ...['hooks', 'agents', 'commands', 'skills', 'plugins', 'mcp_config.json']
+      .map((name) => join(homeRoot, '.claude', name)),
     join(homeRoot, '.codex', 'config.toml'),
     join(homeRoot, '.codex', 'hooks.json'),
+    ...['AGENTS.md', 'skills', 'prompts', 'rules'].map((name) => join(homeRoot, '.codex', name)),
     join(homeRoot, '.config', 'opencode', 'opencode.json'),
-    join(homeRoot, '.config', 'opencode', 'plugins', 'borg-orient.js'),
+    join(homeRoot, '.config', 'opencode', 'opencode.jsonc'),
+    ...['plugins', 'agents', 'commands', 'skills'].map((name) => join(homeRoot, '.config', 'opencode', name)),
     borgConfigRoot,
     borgRoot,
   ];
@@ -200,7 +210,8 @@ export async function snapshotOperatorConfig(homeRoot = homedir()) {
     join(homeRoot, '.config', 'opencode'),
     borgRoot,
   ];
-  for (const target of [...watchedRoots, ...paths]) {
+  const claudePath = join(homeRoot, '.claude.json');
+  for (const target of [...watchedRoots, ...paths, claudePath]) {
     try {
       if ((await lstat(target)).isSymbolicLink()) {
         throw new Error(`release exercise refuses symlinked watched path: ${target}`);
@@ -209,9 +220,33 @@ export async function snapshotOperatorConfig(homeRoot = homedir()) {
       if (error?.code !== 'ENOENT') throw error;
     }
   }
-  return Object.fromEntries(await Promise.all(
+  const snapshot = Object.fromEntries(await Promise.all(
     paths.map(async (target) => [target, await hashProtectedPath(target, excludedPaths)]),
   ));
+  try {
+    const source = await readFile(claudePath, 'utf8');
+    let config;
+    try { config = JSON.parse(source); } catch {
+      // Native JSON errors can quote configuration secrets. Do not retain the
+      // original error as a cause: aggregate diagnostics print nested errors.
+      throw new SyntaxError('release exercise cannot verify malformed .claude.json; expected valid JSON');
+    }
+    assert.ok(config && typeof config === 'object' && !Array.isArray(config), '.claude.json must contain an object');
+    // Claude's session counters are ambient activity. All other keys (including
+    // unknown future configuration) remain covered; the client write guard above
+    // also refuses harness writes to these counters rather than hiding them.
+    delete config.pluginUsage;
+    delete config.promptQueueUseCount;
+    const durable = JSON.stringify(config, function (_key, value) {
+      return value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value;
+    });
+    snapshot[claudePath] = `config:${createHash('sha256').update(durable).digest('hex')}`;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    snapshot[claudePath] = 'missing';
+  }
+  return snapshot;
 }
 
 export function assertJourneyTranscript(transcript, expectedFooter, report) {
@@ -672,6 +707,7 @@ export async function exerciseRelease(options) {
   await mkdir(isolatedHome, { mode: 0o700 });
   const clientEnv = isolatedClientEnv(isolatedHome);
   let directServer;
+  let primaryError;
   try {
     const packDirectory = join(temporary, 'pack');
     const shimDirectory = join(temporary, 'controlled-bin');
@@ -793,14 +829,23 @@ export async function exerciseRelease(options) {
         start: { exitCode: start.report.code, serverStoppedAfterExit: true },
       },
     };
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    if (directServer) await stopProcess(directServer);
-    await rm(temporary, { recursive: true, force: true });
-    assert.deepEqual(
-      await snapshotOperatorConfig(),
-      operatorConfigBefore,
-      'release exercise changed the invoking user\'s global agent or Borg configuration',
-    );
+    const failures = [];
+    try { if (directServer) await stopProcess(directServer); } catch (error) { failures.push(error); }
+    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    try {
+      assert.deepEqual(await snapshotOperatorConfig(), operatorConfigBefore,
+        'release exercise observed a durable change in the invoking user\'s global agent or Borg configuration');
+    } catch (error) { failures.push(error); }
+    if (failures.length) {
+      if (primaryError !== undefined) failures.unshift(primaryError);
+      if (failures.length === 1) throw failures[0];
+      throw new AggregateError(failures,
+        `${failures[0].message ?? failures[0]}; cleanup or operator configuration verification also failed`, { cause: failures[0] });
+    }
   }
 }
 

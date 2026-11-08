@@ -269,6 +269,7 @@ export interface LaunchInput {
     result: AssimilateResult;
     cubeDetail: CubeDetail;
     assignedRole: Role;
+    roleAutoPicked?: boolean;
     apiUrl: string;
     cli: BorgCli;
     effectiveModel: string | null;

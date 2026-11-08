@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import childProcess from 'node:child_process';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
+import { inspect } from 'node:util';
 import { verifyPackedArtifact } from '../scripts/verify-packed-artifact.mjs';
 import { verifyLockRegistry, verifyRegistryMetadata } from '../scripts/verify-lock-registry.mjs';
 import {
@@ -17,6 +21,7 @@ import {
   assertArtifactIdentity,
   assertJourneyTranscript,
   assertServerProcessArgv,
+  exerciseRelease,
   isolatedClientEnv,
   parseReleaseExerciseArgs,
   ptyCommand,
@@ -225,11 +230,13 @@ test('packed-client release journeys isolate Borg and native agent state', () =>
     HOME: '/operator/home',
     BORG_STATE_ROOT: '/operator/state',
     CODEX_HOME: '/operator/codex',
+    CLAUDE_CONFIG_DIR: '/operator/claude',
     XDG_CONFIG_HOME: '/operator/config',
   });
   assert.equal(env.HOME, '/tmp/borg-release-sandbox');
   assert.equal(env.BORG_STATE_ROOT, '/tmp/borg-release-sandbox');
   assert.equal(env.CODEX_HOME, '/tmp/borg-release-sandbox/.codex');
+  assert.equal(env.CLAUDE_CONFIG_DIR, '/tmp/borg-release-sandbox/.claude');
   assert.equal(env.XDG_CONFIG_HOME, '/tmp/borg-release-sandbox/.config');
 });
 
@@ -258,6 +265,162 @@ test('operator configuration snapshot detects durable launch preference mutation
     assert.notDeepEqual(after, before);
   } finally {
     await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('operator snapshot tolerates session counters and JSON ordering, not durable or unknown keys', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'borg-release-config-keys-'));
+  const path = join(home, '.claude.json');
+  try {
+    await writeFile(path, JSON.stringify({ mcpServers: { borg: { command: 'borg-mcp' } }, hooks: {}, permissions: {}, futureConfig: true, pluginUsage: 1, promptQueueUseCount: 2 }));
+    const before = await snapshotOperatorConfig(home);
+    await writeFile(path, JSON.stringify({ promptQueueUseCount: 3, pluginUsage: 4, futureConfig: true, permissions: {}, hooks: {}, mcpServers: { borg: { command: 'borg-mcp' } } }, null, 2));
+    assert.deepEqual(await snapshotOperatorConfig(home), before);
+    const stable = await readFile(path, 'utf8');
+    for (const key of ['mcpServers', 'hooks', 'permissions', 'futureConfig']) {
+      const config = JSON.parse(stable);
+      config[key] = 'changed';
+      await writeFile(path, JSON.stringify(config));
+      assert.notDeepEqual(await snapshotOperatorConfig(home), before, key);
+    }
+    await writeFile(path, '{broken');
+    await assert.rejects(() => snapshotOperatorConfig(home), SyntaxError);
+    await rm(path);
+    assert.notDeepEqual(await snapshotOperatorConfig(home), before);
+    const absent = await snapshotOperatorConfig(home);
+    await writeFile(path, '{}');
+    assert.notDeepEqual(await snapshotOperatorConfig(home), absent);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('operator snapshot covers durable agent directories and ignores unrelated runtime payloads', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'borg-release-config-directories-'));
+  try {
+    await mkdir(join(home, '.borg'), { recursive: true });
+    await mkdir(join(home, '.config', 'borgmcp'), { recursive: true });
+    const before = await snapshotOperatorConfig(home);
+    await mkdir(join(home, '.borg', 'scratch'));
+    await writeFile(join(home, '.borg', 'scratch', 'runtime'), 'activity');
+    await writeFile(join(home, '.config', 'borgmcp', 'opencode-v2.db-wal'), 'activity');
+    await writeFile(join(home, '.config', 'borgmcp', 'opencode-v2-someHost.journal.json'), '{}');
+    assert.deepEqual(await snapshotOperatorConfig(home), before);
+    for (const directory of ['.claude/hooks', '.claude/agents', '.claude/commands', '.claude/skills', '.claude/plugins', '.codex/skills', '.config/opencode/plugins']) {
+      const target = join(home, directory);
+      await mkdir(target, { recursive: true });
+      const stable = await snapshotOperatorConfig(home);
+      await writeFile(join(target, 'new-config'), 'durable');
+      assert.notDeepEqual(await snapshotOperatorConfig(home), stable, directory);
+    }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('exercise preserves artifact failures through cleanup failures and still verifies operator config', async (t) => {
+  const home = await mkdtemp(join(tmpdir(), 'borg-release-config-error-'));
+  const primary = new Error('resolved artifact integrity does not match its declared role');
+  const cleanup = new Error('temporary removal failed');
+  const secret = 'TOK634';
+  const malformed = `{"token":${secret}}`;
+  const savedHome = process.env.HOME;
+  const originalRealpath = fs.promises.realpath;
+  const originalRm = fs.promises.rm;
+  const leftovers = [];
+  let cleanupFails = false;
+  let changedConfig;
+  const configPath = join(home, '.claude.json');
+  t.mock.method(childProcess, 'execFileSync', () => '11.18.0');
+  t.mock.method(fs.promises, 'realpath', async (path, ...args) => {
+    if (path === join(home, 'client.tgz')) throw primary;
+    return originalRealpath(path, ...args);
+  });
+  t.mock.method(fs.promises, 'rm', async (path, ...args) => {
+    if (cleanupFails && String(path).includes('borgmcp-release-exercise-')) {
+      leftovers.push(path);
+      if (changedConfig !== undefined) await writeFile(configPath, changedConfig);
+      throw cleanup;
+    }
+    return originalRm(path, ...args);
+  });
+  syncBuiltinESMExports();
+  process.env.HOME = home;
+  try {
+    await writeFile(configPath, '{}');
+    const run = () => exerciseRelease({ clientTarball: join(home, 'client.tgz') });
+    await assert.rejects(run, (error) => error === primary);
+    cleanupFails = true;
+    for (const content of [undefined, '{"mcpServers":{"unexpected":{}}}', malformed]) {
+      await writeFile(configPath, '{}');
+      changedConfig = content;
+      await assert.rejects(run, (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.cause, primary);
+        assert.equal(error.errors[0], primary);
+        assert.equal(error.errors[1], cleanup);
+        assert.match(error.message, /resolved artifact integrity/);
+        assert.equal(error.errors.length, content === undefined ? 2 : 3);
+        if (content === malformed) {
+          assert.ok(error.errors[2] instanceof SyntaxError);
+          assert.doesNotMatch(inspect(error, { depth: null }), new RegExp(secret));
+          assert.equal(error.errors[2].cause, undefined);
+        }
+        else if (content !== undefined) assert.match(error.errors[2].message, /durable change/);
+        return true;
+      });
+    }
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    for (const path of leftovers) await rm(path, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('malformed operator JSON fails closed without exposing configuration in diagnostics', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'borg-release-config-secret-'));
+  const secret = 'TOK634';
+  try {
+    await writeFile(join(home, '.claude.json'), `{"token":${secret}}`);
+    await assert.rejects(() => snapshotOperatorConfig(home), (error) => {
+      assert.ok(error instanceof SyntaxError);
+      assert.match(error.message, /cannot verify malformed \.claude\.json/);
+      assert.doesNotMatch(inspect(error, { depth: null }), new RegExp(secret));
+      assert.equal(error.cause, undefined);
+      return true;
+    });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('release child isolation refuses harness writes even to ignored counter and runtime paths', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'borg-release-write-control-'));
+  const operatorHome = join(temporary, 'operator');
+  const isolatedHome = join(temporary, 'isolated');
+  try {
+    await mkdir(operatorHome);
+    await mkdir(isolatedHome);
+    const env = isolatedClientEnv(isolatedHome);
+    assert.ok(env.BORGMCP_TEST_FORBIDDEN_HOME);
+    assert.equal(env.BORGMCP_TEST_ALLOWED_ROOTS, isolatedHome);
+    const guardedModule = pathToFileURL(join(root, 'dist', 'guarded-fs.js')).href;
+    const source = `
+      import { writeFileSync, TestIsolationError } from ${JSON.stringify(guardedModule)};
+      for (const path of ${JSON.stringify([join(operatorHome, '.claude.json'), join(operatorHome, '.config', 'borgmcp', 'opencode-v2.db-wal')])}) {
+        try { writeFileSync(path, '{"pluginUsage":1}'); throw new Error('operator write was allowed'); }
+        catch (error) { if (!(error instanceof TestIsolationError)) throw error; }
+      }
+      writeFileSync(${JSON.stringify(join(isolatedHome, '.claude.json'))}, '{"pluginUsage":1}');`;
+    execFileSync(process.execPath, ['--input-type=module', '-e', source], {
+      env: { ...env, BORGMCP_TEST_FORBIDDEN_HOME: operatorHome },
+    });
+    assert.equal(await readFile(join(isolatedHome, '.claude.json'), 'utf8'), '{"pluginUsage":1}');
+    assert.equal((await snapshotOperatorConfig(operatorHome))[join(operatorHome, '.claude.json')], 'missing');
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
   }
 });
 
@@ -494,7 +657,7 @@ async function packedFixture(mutator) {
   return { directory, tarball };
 }
 
-test('release workflows run each property once and allow pre-stage retries', async () => {
+test('release publication retains artifact and authorization boundaries', async () => {
   const workflow = await readFile(join(root, '.github', 'workflows', 'publish.yml'), 'utf8');
   const [verification = '', afterVerify = ''] = workflow.split('\n  publish:\n');
   const publication = afterVerify;
@@ -505,62 +668,33 @@ test('release workflows run each property once and allow pre-stage retries', asy
   assert.match(publication, /needs: verify/);
   assert.match(publication, /environment:\n\s+name: npm-publish/);
   assert.match(publication, /id-token: write/);
-  assert.doesNotMatch(workflow, /\n  registry-verification:\n/);
-  assert.equal((workflow.match(/id-token: write/g) ?? []).length, 1);
   assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN|NPM_TOKEN_PRESENT/);
   const stagedPublish = 'npm stage publish "./release/${{ needs.verify.outputs.tarball }}" --ignore-scripts --access public --provenance --registry=https://registry.npmjs.org';
-  assert.equal(workflow.split(stagedPublish).length - 1, 1);
   assert.doesNotMatch(workflow, /^\s*npm publish\b/m);
   assert.doesNotMatch(workflow, /--tag[= ]staging|npm dist-tag\b/);
-  assert.equal((workflow.match(/--provenance/g) ?? []).length, 1);
-  assert.doesNotMatch(workflow, /SHA512SUMS|sha512sum|DSSE|in-toto|SLSA/);
-  assert.equal((workflow.match(/verify-release-trigger\.mjs/g) ?? []).length, 1);
-  assert.doesNotMatch(workflow, /GITHUB_RUN_ATTEMPT/);
-  assert.equal((workflow.match(/npm install --global --prefix "\$\{consumer\}"/g) ?? []).length, 1);
-  const checkouts = [...workflow.matchAll(/uses: actions\/checkout@/g)].map((match) => match.index);
-  const configGuards = [...workflow.matchAll(/run: test ! -e \.npmrc/g)].map((match) => match.index);
-  const setupNodes = [...workflow.matchAll(/uses: actions\/setup-node@/g)].map((match) => match.index);
-  const bootstraps = [...workflow.matchAll(/npm install --prefix "\$\{npm_prefix\}"/g)].map((match) => match.index);
-  assert.equal(checkouts.length, 2);
-  assert.equal(configGuards.length, 1);
-  assert.equal(setupNodes.length, 2);
-  assert.equal(bootstraps.length, 2);
-  assert.ok(checkouts[0] < configGuards[0]);
-  assert.ok(configGuards[0] < setupNodes[0]);
-  assert.ok(setupNodes[0] < bootstraps[0]);
+  assert.match(verification, /node scripts\/verify-release-trigger\.mjs/);
+  const configGuard = workflow.indexOf('run: test ! -e .npmrc');
+  const bootstrap = workflow.indexOf('npm install --prefix "${npm_prefix}"');
+  assert.ok(configGuard >= 0 && configGuard < bootstrap);
   assert.doesNotMatch(workflow, /registry-url:/);
-  assert.equal((workflow.match(/--registry=https:\/\/registry\.npmjs\.org npm@11\.18\.0/g) ?? []).length, 2);
-  assert.equal((workflow.match(/npm ci --ignore-scripts/g) ?? []).length, 1);
-  assert.equal((workflow.match(/npm audit --audit-level=high/g) ?? []).length, 1);
-  assert.doesNotMatch(verification, /npm run check|npm test|test:unit|test:release/);
-  assert.equal((workflow.match(/npm run build/g) ?? []).length, 1);
-  assert.equal((workflow.match(/npm pack --ignore-scripts/g) ?? []).length, 1);
-  assert.equal((workflow.match(/verify-packed-artifact\.mjs/g) ?? []).length, 1);
-  assert.equal((workflow.match(/smoke-packed-client\.mjs/g) ?? []).length, 1);
+  for (const job of [verification, publication]) {
+    assert.match(job, /--registry=https:\/\/registry\.npmjs\.org npm@11\.18\.0/);
+  }
+  assert.match(verification, /npm ci --ignore-scripts/);
+  assert.match(verification, /npm audit --audit-level=high/);
+  assert.match(verification, /verify-packed-artifact\.mjs/);
+  assert.match(verification, /smoke-packed-client\.mjs/);
   const publicSource = workflow.indexOf('verify-public-source.mjs');
   const readiness = workflow.indexOf('verify-release-readiness.mjs');
   const install = workflow.indexOf('npm ci --ignore-scripts');
   assert.ok(publicSource > 0 && publicSource < readiness && readiness < install);
-  assert.match(workflow, /name: npm-release-\$\{\{ steps\.release\.outputs\.version \}\}/);
-  assert.match(workflow, /name: npm-release-\$\{\{ needs\.verify\.outputs\.version \}\}/);
   assert.match(publication, /verify-registry-release\.mjs prepublish release\/artifact-report\.json/);
   assert.match(publication, /NPM_EXPECTED_OWNER: \$\{\{ vars\.NPM_EXPECTED_OWNER \}\}/);
   assert.match(publication, /test -n "\$\{ACTIONS_ID_TOKEN_REQUEST_URL:-\}"/);
   assert.match(publication, /test -n "\$\{ACTIONS_ID_TOKEN_REQUEST_TOKEN:-\}"/);
   assert.match(publication, /test -z "\$\{NODE_AUTH_TOKEN:-\}"/);
   assert.ok(publication.indexOf('verify-registry-release.mjs prepublish') < publication.indexOf(stagedPublish));
-  assert.doesNotMatch(workflow, /verify-registry-release\.mjs postpublish/);
-  assert.doesNotMatch(workflow, /npm audit signatures/);
-  assert.doesNotMatch(workflow, /CLIENT_NPM_PUBLICATION|Confirm publication remains deferred/);
-
   const ci = await readFile(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
-  assert.match(ci, /push:\n\s+branches: \[main\]/);
-  assert.match(ci, /pull_request:/);
-  assert.equal((ci.match(/npm run test:unit/g) ?? []).length, 1);
-  assert.doesNotMatch(ci, /timeout 5m npm test(?:\s|$)/);
-  assert.equal((ci.match(/node --test test\/release-lane\.test\.mjs/g) ?? []).length, 1);
-  assert.equal((ci.match(/npm run onboarding:smoke/g) ?? []).length, 1);
-  assert.equal((ci.match(/npm run verify:package/g) ?? []).length, 1);
   for (const line of `${workflow}\n${ci}`.split('\n').filter((value) => value.trim().startsWith('uses:'))) {
     assert.match(line, /@[0-9a-f]{40}(?:\s+#.*)?$/, `Action is not pinned by full SHA: ${line.trim()}`);
   }

@@ -35,7 +35,9 @@ drone. Borg has no hosted account or subscription.
   [Batch startup](docs/BATCH_STARTUP.md) for terminal routing and preview options.
 - `borg assimilate [role]` adds or resumes one drone under one role. Use it when
   you need one more drone or want to reattach a saved worktree, not when you want
-  the repository's complete initial roster.
+  the repository's complete initial roster. Omit the role to auto-pick from cube
+  roles and occupancy, not the worktree name. For manual fleet setup, pass each
+  role explicitly: `borg assimilate "Release Quality" --worktree release-quality`.
 - `borg representative prepare --host <host:port> --coordinator <drone-label>` connects a **human
   representative**: a separate automated drone, under its own role, through
   which a standard MCP host such as Hermes relays your requests, questions and

@@ -301,7 +301,6 @@ describe('review controls (S2 round 1): EOF and startup under a growing log', ()
   });
 
   it('announces listening before any log walk: startup is not starved by a growing log', async () => {
-    const initial = start(); await ready(initial); initial.child.stdin!.end(); await initial.exited;
     const original = cube.backend.bind(cube); let grow = true; let calls = 0; const limits: number[] = [];
     cube.backend = () => ({ ...original(), readAfter: async (cursor, limit) => {
       if (!grow) return original().readAfter(cursor, limit);

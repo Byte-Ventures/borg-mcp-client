@@ -1012,6 +1012,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     const stdoutPayload = stdout.mock.calls.map((c) => String(c[0])).join('');
     expect(stdoutPayload).toContain('Attached `drone-1`');
+    expect(stdoutPayload).toContain('Role `coordinator` was auto-picked');
     expect(stdoutPayload).toContain('coordinator');
     expect(stdoutPayload).toContain('myrepo');
     expect(stdoutPayload).toContain('borg_whoami');
@@ -1045,6 +1046,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     await runAssimilate({ role: 'fact-checker', flags: { yes: true } }, deps);
     const stdoutPayload = stdout.mock.calls.map((c) => String(c[0])).join('');
     expect(stdoutPayload).toContain('fact-checker');
+    expect(stdoutPayload).not.toContain('auto-picked');
     expect(stdoutPayload).toContain('writers-room');
     expect(stdoutPayload).toContain('borg_whoami');
     expect(stdoutPayload).toContain('borg_roster');
@@ -1946,6 +1948,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
   });
 
   it('a --here reattach declares EXACT with the prior live-bearer digest', async () => {
+    const stdout = vi.fn();
     const activate = vi.fn(async () => {});
     const scrubPending = vi.fn(async () => {});
     const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
@@ -1957,12 +1960,14 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     const deps = makeStubDeps({
       assimilate: localResultWithFinalize(activate, scrubPending),
       getCube: getCube(), finalizeServerSeat,
+      stdout,
       getActiveCube: existingSeat,
       probeSeat: vi.fn(async () => 'live'),
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
       cwd: () => '/work/myrepo', findProjectRoot: () => '/work/myrepo',
     });
     expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(0);
+    expect(stdout.mock.calls.flat().join('\n')).not.toContain('auto-picked');
     // CR #3: the FULL prior binding — its drone id AND live-bearer digest — is pinned.
     expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({
       kind: 'exact',
