@@ -271,11 +271,18 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       const seat = fleet[9];
       await seat.mcp.close();
       await seat.agent.close();
-      await run([join(root, 'test/fixtures/opencode-v2-probe.mjs')], {
+      const nativeOutput = await run([join(root, 'test/fixtures/opencode-v2-probe.mjs')], {
         ...seat.env, OPENCODE_TEST_V2_BINARY: process.env.OPENCODE_TEST_V2_BINARY,
         OPENCODE_TEST_SEAT_HOME: seat.home, OPENCODE_TEST_SEAT_WORKTREE: seat.worktree,
         OPENCODE_TEST_DRONE_ID: seat.droneId, OPENCODE_TEST_CUBE_ID: cube.cube_id,
       });
+      const observations = nativeOutput.trim().split('\n').flatMap(line => {
+        try { const row = JSON.parse(line); return row.wakeRecovery || row.wakeRestart ? [row] : []; }
+        catch { return []; }
+      });
+      expect(observations.some(row => row.wakeRecovery?.asynchronousFailure), 'Native admission/busy/failure cases executed').toBe(true);
+      expect(observations.some(row => row.wakeRestart?.recovered), 'Native pending/in-flight restart cases executed').toBe(true);
+      for (const row of observations) console.log(JSON.stringify(row));
     }
   } finally {
     for (const cleanup of cleanups.reverse()) await cleanup();

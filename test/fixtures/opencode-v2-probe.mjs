@@ -71,6 +71,23 @@ const pluginDelayMs = Number(process.env.OPENCODE_TEST_PLUGIN_DELAY_MS ?? 0);
 assert.ok(Number.isInteger(pluginDelayMs) && pluginDelayMs >= 0 && pluginDelayMs < 60_000, 'Invalid fixture plugin delay');
 const callsPath = join(root, 'mcp-calls.jsonl');
 const environmentPath = join(root, 'mcp-environment.jsonl');
+function assertMaterializedWake(rows, nonTargetRows, delivery, text) {
+  const matches = rows.filter(row => row.type === 'user' && row.text === text);
+  assert.equal(matches.length, 1, 'One materialized user input, not merely an HTTP admission');
+  assert.equal(matches[0].id, delivery.id);
+  assert.equal(matches[0].metadata?.borgOpenCodeWakeIdentity, delivery.id);
+  assert.ok(!nonTargetRows.some(row => row.type === 'user' && row.text === text), 'Wake does not reach the non-target session');
+}
+function checkMaterializationControls(rows, nonTargetRows, delivery, text) {
+  assertMaterializedWake(rows, nonTargetRows, delivery, text);
+  const message = rows.find(row => row.id === delivery.id);
+  // Corrupt actual host observations, not expected outputs: every check must
+  // reject loss, duplication, missing identity, and a wrong-target copy.
+  assert.throws(() => assertMaterializedWake(rows.filter(row => row.id !== delivery.id), nonTargetRows, delivery, text));
+  assert.throws(() => assertMaterializedWake([...rows, message], nonTargetRows, delivery, text));
+  assert.throws(() => assertMaterializedWake(rows.map(row => row.id === delivery.id ? { ...row, metadata: {} } : row), nonTargetRows, delivery, text));
+  assert.throws(() => assertMaterializedWake(rows, [...nonTargetRows, message], delivery, text));
+}
 const valuePath = join(root, 'inline-value.txt'); writeFileSync(valuePath, 'native-file-expanded');
 const plugin = join(root, 'fixture-plugin'); mkdirSync(plugin);
 writeFileSync(join(plugin, 'index.js'), `export default {id:'borg.native-fixture.tools',async setup(ctx){
@@ -171,6 +188,7 @@ try {
   const { readOpenCodeV2Descriptor, readOpenCodeV2PluginDescriptor, callOpenCodeV2Broker } = await import('../../dist/opencode-v2-broker.js');
   const { openCodePrivateRoot } = await import('../../dist/opencode-private-state.js');
   let nativeClient;
+  let recoveryBystander;
   let nativeRootHeaders;
   let nativeRootURL;
   const env = { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, BORG_STATE_ROOT: root,
@@ -274,16 +292,12 @@ try {
     const inbox = () => nativeClient.session.inbox.list({ sessionID });
     const messages = async () => (await nativeClient.message.list({ sessionID, limit: 100 })).data;
     const bystander = await nativeClient.session.create({ location: { directory }, title: 'Wake recovery non-target' });
+    recoveryBystander = bystander.id;
     const wakeInput = (key, source, text, resume = true) => ({ key, source, text, resume });
     const proof = async (delivery, text) => {
       const rows = await messages();
-      const matches = rows.filter(row => row.type === 'user' && row.text === text);
-      assert.equal(matches.length, 1, 'One materialized user input, not merely an HTTP admission');
-      assert.equal(matches[0].id, delivery.id);
-      assert.equal(matches[0].metadata.borgOpenCodeWakeIdentity, delivery.id);
-      assert.ok(!(await nativeClient.message.list({ sessionID: bystander.id, limit: 100 })).data
-        .some(row => row.type === 'user' && row.text === text), 'Wake does not reach the non-target session');
-      return matches[0];
+      const nonTargetRows = (await nativeClient.message.list({ sessionID: bystander.id, limit: 100 })).data;
+      checkMaterializationControls(rows, nonTargetRows, delivery, text);
     };
     const lostText = 'Recovery response-lost input';
     losePromptResponse = true;
@@ -310,6 +324,17 @@ try {
     assert.equal(new Set(burst.map(row => row.id)).size, 3);
     const replay = await callOpenCodeV2Broker(descriptor, '/wake', wakeInput('burst-reconnect', 'recovery-burst-1', 'Recovery burst 1'));
     assert.equal(replay.id, burst[1].id);
+    const busyInbox = await inbox();
+    const burstHostState = [];
+    for (const delivery of burst) {
+      const queued = busyInbox.filter(row => row.id === delivery.id);
+      let message;
+      try { message = await nativeClient.session.message.get({ sessionID, messageID: delivery.id }); } catch {}
+      assert.ok(queued.some(row => row.payload.metadata?.borgOpenCodeWakeIdentity === delivery.id) ||
+        (message?.type === 'user' && message.metadata?.borgOpenCodeWakeIdentity === delivery.id),
+      'Busy admission must have matching native inbox/message evidence');
+      burstHostState.push({ id: delivery.id, inboxCount: queued.length, materialized: message?.type === 'user' });
+    }
     releaseGeneration();
     await nativeClient.session.wait({ sessionID }, { signal: AbortSignal.timeout(15_000) });
     await proof(lost, lostText);
@@ -329,12 +354,19 @@ try {
     assert.equal(failNextGeneration, false, 'Failure control reached the provider');
     await proof(failed, failedText);
     const outcome = await messages();
-    assert.ok(outcome.some(row => !beforeFailure.has(row.id) && row.type === 'assistant' && row.error), 'Native history records asynchronous processing failure');
+    const failureRows = outcome.filter(row => !beforeFailure.has(row.id));
+    const assertProcessingFailure = rows => assert.ok(rows.some(row => row.type === 'assistant' && row.error),
+      'Native history records asynchronous processing failure');
+    assertProcessingFailure(failureRows);
+    assert.throws(() => assertProcessingFailure(failureRows.map(({ error: _error, ...row }) => row)),
+      'An admission or successful response cannot satisfy the processing-failure check');
     const failedDelivery = await callOpenCodeV2Broker(descriptor, '/wake', { ...wakeInput('failure-confirm', 'recovery-processing-failure', failedText), allowSubmit: false });
     assert.equal(failedDelivery.delivered, true, 'Delivered input does not assert successful model work');
     console.log(JSON.stringify({ wakeRecovery: { lostResponse: lost.id, busy: busy.id,
       burstAdmissionOrder: burst.map(row => row.id), observedMessageOrder: observedOrder,
-      asynchronousFailure: failed.id, target: sessionID } }));
+      burstHostState,
+      asynchronousFailure: failed.id, processingOutcome: 'native-assistant-error', target: sessionID,
+      controls: 'loss/duplicate/identity/wrong-target/outcome rejected' } }));
   }
   const wake = await callOpenCodeV2Broker(descriptor, '/wake', { key:'wake-fixture', text:'Local wake fixture', source:'source-fixture' });
   const duplicate = await callOpenCodeV2Broker(descriptor, '/wake', { key:'wake-fixture-reping', text:'Local wake fixture', source:'source-fixture' });
@@ -486,11 +518,9 @@ try {
     assert.notEqual(resumed.launch, descriptor.launch, 'Restart exercises a new broker generation');
     await nativeClient.session.wait({ sessionID }, { signal: AbortSignal.timeout(15_000) });
     const rows = (await nativeClient.message.list({ sessionID, limit: 100 })).data;
+    const nonTargetRows = (await nativeClient.message.list({ sessionID: recoveryBystander, limit: 100 })).data;
     for (const [delivery, text] of [[inFlight, 'Recovery restart in-flight'], [pending, 'Recovery restart pending']]) {
-      const matches = rows.filter(row => row.type === 'user' && row.text === text);
-      assert.equal(matches.length, 1, 'Restart preserves each pending/in-flight input without duplication');
-      assert.equal(matches[0].id, delivery.id);
-      assert.equal(matches[0].metadata.borgOpenCodeWakeIdentity, delivery.id);
+      checkMaterializationControls(rows, nonTargetRows, delivery, text);
       assert.ok(!(await nativeClient.session.inbox.list({ sessionID })).some(row => row.id === delivery.id), 'Recovered input left the native inbox');
     }
     console.log(JSON.stringify({ wakeRestart: { sessionID, pending: pending.id, inFlight: inFlight.id, recovered: true } }));
