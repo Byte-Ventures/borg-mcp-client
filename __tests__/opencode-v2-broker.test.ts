@@ -106,6 +106,48 @@ describe('OpenCode 2 session broker', () => {
     expect(prompt).toHaveBeenCalledTimes(1);
   });
 
+  it('reconciles a response lost after admission before concurrent retries and reconnect', async () => {
+    const { broker, prompt, inbox, messages, seat } = await fixture();
+    prompt.mockImplementationOnce(async (input) => {
+      inbox.push({ id: input.id });
+      throw new Error('Response lost after native admission');
+    });
+    const first = await broker.call('/wake', { key: 'lost', source: 'source', text: 'pending input' });
+    expect(first).toMatchObject({ accepted: true, delivered: false, settled: false });
+    await broker.call('/bind', { seat });
+    const retries = await Promise.all(['retry-one', 'retry-two'].map(key => broker.call('/wake', {
+      key, source: 'source', text: 'pending input',
+    })));
+    expect(retries.map(row => row.id)).toEqual([first.id, first.id]);
+    expect(inbox).toEqual([{ id: first.id }]);
+    expect(prompt).toHaveBeenCalledTimes(1);
+    inbox.length = 0;
+    messages.set(first.id, { role: 'user', metadata: { borgOpenCodeWakeIdentity: first.id } });
+    expect(await broker.call('/wake', { key: 'confirm', source: 'source', text: 'pending input', allowSubmit: false }))
+      .toMatchObject({ id: first.id, accepted: true, delivered: true, settled: false });
+    expect(prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not confuse inbox admission or an unrelated native message with delivered input', async () => {
+    const { broker, messages, inbox, prompt } = await fixture();
+    const first = await broker.call('/wake', { key: 'entry', text: 'wake' });
+    expect(first).toMatchObject({ accepted: true, delivered: false });
+    inbox.length = 0;
+    for (const message of [
+      { role: 'assistant', metadata: { borgOpenCodeWakeIdentity: first.id } },
+      { role: 'user', metadata: {} },
+      { role: 'user', metadata: { borgOpenCodeWakeIdentity: 'different-id' } },
+    ]) {
+      messages.set(first.id, message);
+      expect(await broker.call('/wake', { key: 'entry', text: 'wake', allowSubmit: false }))
+        .toMatchObject({ delivered: false, settled: false });
+    }
+    messages.set(first.id, { role: 'user', metadata: { borgOpenCodeWakeIdentity: first.id } });
+    expect(await broker.call('/wake', { key: 'entry', text: 'wake', allowSubmit: false }))
+      .toMatchObject({ delivered: true, settled: false });
+    expect(prompt).toHaveBeenCalledTimes(1);
+  });
+
   it('deduplicates changing reping nonces by durable source, including timeout, handoff and settlement', async () => {
     const { broker, prompt, sessions, messages, seat } = await fixture();
     prompt.mockImplementationOnce(async () => { throw new Error('Ambiguous admission'); });
