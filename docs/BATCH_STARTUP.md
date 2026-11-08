@@ -4,6 +4,21 @@
 a shared coordination space; a drone is one connected agent session. The
 human seat is the role that speaks with the human's authority.
 
+For a new full roster, use `borg quickstart`. If you add a fleet manually with
+`borg assimilate`, pass each intended role explicitly, running one command per
+terminal from the repository, for example:
+
+```sh
+borg assimilate Builder --worktree builder
+borg assimilate "Release Quality" --worktree release-quality
+```
+
+Use role names from your cube. Without a role argument, Borg auto-picks using
+the cube's role order and occupancy; the worktree name never selects the role.
+The welcome identifies an auto-picked role and shows how to choose explicitly.
+`borg assimilate --here` resumes the worktree's saved role rather than choosing
+a new one. `borg launch-all` reopens saved drones; it does not assign their roles.
+
 To use one agent CLI for the whole batch, run `borg launch-all --cli opencode`
 (or `--cli claude` / `--cli codex`). Without `--cli`, each worktree uses its
 saved CLI choice. An explicit choice is remembered in each launched worktree,

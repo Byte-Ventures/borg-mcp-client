@@ -20,6 +20,7 @@ export function renderAssimilationWelcome(
   cubeName: string,
   useColor: boolean,
   localApiUrl?: string,
+  roleAutoPicked = false,
 ): string {
   const check = useColor ? `${GREEN}✓${RESET}` : '✓';
   const teammateLines = localApiUrl === undefined
@@ -30,6 +31,10 @@ export function renderAssimilationWelcome(
       ];
   return [
     `${check} Attached \`${droneLabel}\` to \`${roleName}\` in cube \`${cubeName}\`.`,
+    ...(roleAutoPicked ? [
+      `Role \`${roleName}\` was auto-picked (no role supplied).`,
+      `Choose explicitly with \`borg assimilate "<role>"\`.`,
+    ] : []),
     ``,
     `In the launched agent, run \`borg_whoami\` and \`borg_roster\``,
     `to verify the connection and begin coordinating.`,

@@ -1,2 +1,2 @@
-export declare function renderAssimilationWelcome(droneLabel: string, roleName: string, cubeName: string, useColor: boolean, localApiUrl?: string): string;
+export declare function renderAssimilationWelcome(droneLabel: string, roleName: string, cubeName: string, useColor: boolean, localApiUrl?: string, roleAutoPicked?: boolean): string;
 //# sourceMappingURL=assimilate-welcome.d.ts.map

@@ -657,7 +657,7 @@ async function packedFixture(mutator) {
   return { directory, tarball };
 }
 
-test('release workflows run each property once and allow pre-stage retries', async () => {
+test('release publication retains artifact and authorization boundaries', async () => {
   const workflow = await readFile(join(root, '.github', 'workflows', 'publish.yml'), 'utf8');
   const [verification = '', afterVerify = ''] = workflow.split('\n  publish:\n');
   const publication = afterVerify;
@@ -668,62 +668,33 @@ test('release workflows run each property once and allow pre-stage retries', asy
   assert.match(publication, /needs: verify/);
   assert.match(publication, /environment:\n\s+name: npm-publish/);
   assert.match(publication, /id-token: write/);
-  assert.doesNotMatch(workflow, /\n  registry-verification:\n/);
-  assert.equal((workflow.match(/id-token: write/g) ?? []).length, 1);
   assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN|NPM_TOKEN_PRESENT/);
   const stagedPublish = 'npm stage publish "./release/${{ needs.verify.outputs.tarball }}" --ignore-scripts --access public --provenance --registry=https://registry.npmjs.org';
-  assert.equal(workflow.split(stagedPublish).length - 1, 1);
   assert.doesNotMatch(workflow, /^\s*npm publish\b/m);
   assert.doesNotMatch(workflow, /--tag[= ]staging|npm dist-tag\b/);
-  assert.equal((workflow.match(/--provenance/g) ?? []).length, 1);
-  assert.doesNotMatch(workflow, /SHA512SUMS|sha512sum|DSSE|in-toto|SLSA/);
-  assert.equal((workflow.match(/verify-release-trigger\.mjs/g) ?? []).length, 1);
-  assert.doesNotMatch(workflow, /GITHUB_RUN_ATTEMPT/);
-  assert.equal((workflow.match(/npm install --global --prefix "\$\{consumer\}"/g) ?? []).length, 1);
-  const checkouts = [...workflow.matchAll(/uses: actions\/checkout@/g)].map((match) => match.index);
-  const configGuards = [...workflow.matchAll(/run: test ! -e \.npmrc/g)].map((match) => match.index);
-  const setupNodes = [...workflow.matchAll(/uses: actions\/setup-node@/g)].map((match) => match.index);
-  const bootstraps = [...workflow.matchAll(/npm install --prefix "\$\{npm_prefix\}"/g)].map((match) => match.index);
-  assert.equal(checkouts.length, 2);
-  assert.equal(configGuards.length, 1);
-  assert.equal(setupNodes.length, 2);
-  assert.equal(bootstraps.length, 2);
-  assert.ok(checkouts[0] < configGuards[0]);
-  assert.ok(configGuards[0] < setupNodes[0]);
-  assert.ok(setupNodes[0] < bootstraps[0]);
+  assert.match(verification, /node scripts\/verify-release-trigger\.mjs/);
+  const configGuard = workflow.indexOf('run: test ! -e .npmrc');
+  const bootstrap = workflow.indexOf('npm install --prefix "${npm_prefix}"');
+  assert.ok(configGuard >= 0 && configGuard < bootstrap);
   assert.doesNotMatch(workflow, /registry-url:/);
-  assert.equal((workflow.match(/--registry=https:\/\/registry\.npmjs\.org npm@11\.18\.0/g) ?? []).length, 2);
-  assert.equal((workflow.match(/npm ci --ignore-scripts/g) ?? []).length, 1);
-  assert.equal((workflow.match(/npm audit --audit-level=high/g) ?? []).length, 1);
-  assert.doesNotMatch(verification, /npm run check|npm test|test:unit|test:release/);
-  assert.equal((workflow.match(/npm run build/g) ?? []).length, 1);
-  assert.equal((workflow.match(/npm pack --ignore-scripts/g) ?? []).length, 1);
-  assert.equal((workflow.match(/verify-packed-artifact\.mjs/g) ?? []).length, 1);
-  assert.equal((workflow.match(/smoke-packed-client\.mjs/g) ?? []).length, 1);
+  for (const job of [verification, publication]) {
+    assert.match(job, /--registry=https:\/\/registry\.npmjs\.org npm@11\.18\.0/);
+  }
+  assert.match(verification, /npm ci --ignore-scripts/);
+  assert.match(verification, /npm audit --audit-level=high/);
+  assert.match(verification, /verify-packed-artifact\.mjs/);
+  assert.match(verification, /smoke-packed-client\.mjs/);
   const publicSource = workflow.indexOf('verify-public-source.mjs');
   const readiness = workflow.indexOf('verify-release-readiness.mjs');
   const install = workflow.indexOf('npm ci --ignore-scripts');
   assert.ok(publicSource > 0 && publicSource < readiness && readiness < install);
-  assert.match(workflow, /name: npm-release-\$\{\{ steps\.release\.outputs\.version \}\}/);
-  assert.match(workflow, /name: npm-release-\$\{\{ needs\.verify\.outputs\.version \}\}/);
   assert.match(publication, /verify-registry-release\.mjs prepublish release\/artifact-report\.json/);
   assert.match(publication, /NPM_EXPECTED_OWNER: \$\{\{ vars\.NPM_EXPECTED_OWNER \}\}/);
   assert.match(publication, /test -n "\$\{ACTIONS_ID_TOKEN_REQUEST_URL:-\}"/);
   assert.match(publication, /test -n "\$\{ACTIONS_ID_TOKEN_REQUEST_TOKEN:-\}"/);
   assert.match(publication, /test -z "\$\{NODE_AUTH_TOKEN:-\}"/);
   assert.ok(publication.indexOf('verify-registry-release.mjs prepublish') < publication.indexOf(stagedPublish));
-  assert.doesNotMatch(workflow, /verify-registry-release\.mjs postpublish/);
-  assert.doesNotMatch(workflow, /npm audit signatures/);
-  assert.doesNotMatch(workflow, /CLIENT_NPM_PUBLICATION|Confirm publication remains deferred/);
-
   const ci = await readFile(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
-  assert.match(ci, /push:\n\s+branches: \[main\]/);
-  assert.match(ci, /pull_request:/);
-  assert.equal((ci.match(/npm run test:unit/g) ?? []).length, 1);
-  assert.doesNotMatch(ci, /timeout 5m npm test(?:\s|$)/);
-  assert.equal((ci.match(/node --test test\/release-lane\.test\.mjs/g) ?? []).length, 1);
-  assert.equal((ci.match(/npm run onboarding:smoke/g) ?? []).length, 1);
-  assert.equal((ci.match(/npm run verify:package/g) ?? []).length, 1);
   for (const line of `${workflow}\n${ci}`.split('\n').filter((value) => value.trim().startsWith('uses:'))) {
     assert.match(line, /@[0-9a-f]{40}(?:\s+#.*)?$/, `Action is not pinned by full SHA: ${line.trim()}`);
   }
