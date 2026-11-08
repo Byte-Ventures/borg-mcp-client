@@ -2,7 +2,7 @@ export const LOG_AUDIT_NUDGE = (count: number): string =>
   `Heads up: ${count}+ state-changing tool calls since the last \`borg_log\` post. ` +
   'If that work was a substantive unit (a change that ships, a blocker hit, a finding ' +
   "worth sharing), post to the cube log per your role's conventions before continuing. " +
-  'Choose `to: "broadcast"` or a non-empty selector array; never omit `to`.';
+  'Use {"to":"broadcast"} for all drones or {"to":["Build"]} for direct delivery. Build is an example role name; use an existing selector from your cube. Even one recipient requires an array; never use {"to":"Build"}, an empty array, or omit `to`.';
 
 /**
  * Pure transcript scan shared by the Claude hook and the OpenCode plugin.
@@ -14,7 +14,7 @@ export function evaluateLogAudit(
     `Heads up: ${count}+ state-changing tool calls since the last \`borg_log\` post. ` +
     'If that work was a substantive unit (a change that ships, a blocker hit, a finding ' +
     "worth sharing), post to the cube log per your role's conventions before continuing. " +
-    'Choose `to: "broadcast"` or a non-empty selector array; never omit `to`.',
+    'Use {"to":"broadcast"} for all drones or {"to":["Build"]} for direct delivery. Build is an example role name; use an existing selector from your cube. Even one recipient requires an array; never use {"to":"Build"}, an empty array, or omit `to`.',
 ): string | null {
   const materialTools = new Set([
     'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash',

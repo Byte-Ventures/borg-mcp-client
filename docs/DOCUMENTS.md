@@ -37,9 +37,12 @@ document disappears from `borg_list_documents`, but an exact
 
 ## Activity-Log Citations
 
-Pass `to: "broadcast"` or a non-empty selector array together with
+Pass `{"to":"broadcast"}` for every drone or `{"to":["Build"]}` for direct delivery
+(always an array, even for one recipient), together with
 `documents: ["<full-document-id>"]` to `borg_log` to attach structured
-citations to an activity-log entry. Borg validates all ids atomically: unknown,
+citations to an activity-log entry. `Build` is an example role name; use an
+existing selector from your cube when addressing a real post.
+Borg validates all ids atomically: unknown,
 duplicate, or cross-cube ids refuse the post rather than creating a partial
 entry. Citations include the full id, title, UTF-8 size, and document state;
 they do not inline document content. Readers can call `borg_get_document` when

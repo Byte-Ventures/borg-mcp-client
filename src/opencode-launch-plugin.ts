@@ -13,7 +13,7 @@ export const OPENCODE_CODE_MODE_GUIDANCE =
   'Batch independent reads with Promise.all; await dependent calls and mutations in order. ' +
   'Return compact findings and identifiers instead of entire logs, rosters, or documents. ' +
   'If Borg tools are exposed directly, call their advertised names. ' +
-  'For borg_log choose to: "broadcast" or a non-empty selector array.';
+  'For borg_log use {"to":"broadcast"} for all drones or {"to":["Build"]} for direct delivery; even one recipient requires an array, never {"to":"Build"}. Build is an example role name; use an existing selector from your cube.';
 
 /** V2-only entrypoint. Imports only Borg code and Node builtins, no host SDK. */
 export function buildBorgV2PluginSource(): string {

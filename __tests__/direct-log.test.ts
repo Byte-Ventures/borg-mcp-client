@@ -35,6 +35,23 @@ describe('borg_log explicit audience', () => {
     const audience = ['builder-1'];
     expect(normalizeLogAudience(audience)).not.toBe(audience);
   });
+
+  it('shows a corrected direct call for a mistaken string recipient', () => {
+    expect(() => normalizeLogAudience('Build')).toThrow('{"to":["Build"]}');
+    expect(() => normalizeLogAudience('Build')).toThrow('Even one recipient needs an array');
+    expect(() => normalizeLogAudience('"broadcast"')).toThrow('For broadcast use {"to":"broadcast"}');
+  });
+
+  it.each(([[], undefined, ['builder-demo', 'builder-demo']] as unknown[]).map(value => [value]))('labels malformed-array recovery as an example, not a new destination %#', (audience) => {
+    try { normalizeLogAudience(audience); throw new Error('expected refusal'); }
+    catch (error) {
+      const message = (error as Error).message;
+      expect(message).toContain('Direct-delivery example:');
+      expect(message).toContain('<existing-selector>');
+      expect(message).toContain('use existing selectors from your cube, not a replacement destination');
+      expect(message).not.toContain('Build');
+    }
+  });
 });
 
 // gh#491: hosts normalize the manifest's type-less `to` property (kept

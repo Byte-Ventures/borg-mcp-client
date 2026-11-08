@@ -289,6 +289,9 @@ describe('borg_log ARRIVAL instruction ordering', () => {
 
       expect(result).toMatchObject({ isError: true });
       expect(result.content[0].text).toMatch(/to|selector/);
+      expect(result.content[0].text).toContain('{"to":[');
+      expect(result.content[0].text).toContain('Even one recipient needs an array');
+      expect(result.content[0].text).toContain('use existing selectors from your cube');
       expect(state.shouldSuppressLifecycleLog).not.toHaveBeenCalled();
       expect(state.appendLog).not.toHaveBeenCalled();
     },

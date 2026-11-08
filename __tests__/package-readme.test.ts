@@ -113,12 +113,11 @@ describe('published package artifact', () => {
       expect(packedReadme).toContain('`"broadcast"`');
       expect(packedReadme).toContain('non-empty selector array');
       expect(packedReadme).toContain('not read confidentiality');
-      expect(packedReadme).toContain('Omission,');
       const packedLogSchema = packedToolManifest.slice(
         packedToolManifest.indexOf("name: 'borg_log'"),
         packedToolManifest.indexOf("name: 'borg_list_cubes'"),
       );
-      expect(packedLogSchema).toContain('Required explicit audience');
+      expect(packedLogSchema).toContain('{"to":["Build"]}');
       expect(packedLogSchema).not.toContain('oneOf');
       const relativeLinks = [...packedReadme.matchAll(/\[[^\]]+\]\((?!https?:|#)([^)#]+)(?:#[^)]+)?\)/g)]
         .map((match) => match[1].replace(/^\.\//, ''));
