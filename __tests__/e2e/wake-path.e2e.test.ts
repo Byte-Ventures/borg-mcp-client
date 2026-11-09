@@ -35,6 +35,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
   // An explicit guard prevents accidental server execution on an operator machine.
   expect(process.env.CI).toBe('true');
   expect(process.platform).toBe('linux');
+  const contractDeadline = Date.now() + 110_000; // Leave cleanup inside the existing 120-second test budget.
   const temporary = await mkdtemp(join(tmpdir(), 'borg-e2e-'));
   const cleanups: Array<() => Promise<unknown>> = [];
   const children: ReturnType<typeof spawn>[] = [];
@@ -275,6 +276,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
         ...seat.env, OPENCODE_TEST_V2_BINARY: process.env.OPENCODE_TEST_V2_BINARY,
         OPENCODE_TEST_SEAT_HOME: seat.home, OPENCODE_TEST_SEAT_WORKTREE: seat.worktree,
         OPENCODE_TEST_DRONE_ID: seat.droneId, OPENCODE_TEST_CUBE_ID: cube.cube_id,
+        OPENCODE_TEST_CONTRACT_DEADLINE: String(contractDeadline),
       });
       const observations = nativeOutput.trim().split('\n').flatMap(line => {
         try { const row = JSON.parse(line); return row.wakeRecovery || row.wakeRestart || row.nativeContracts ? [row] : []; }

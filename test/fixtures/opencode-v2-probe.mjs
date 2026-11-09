@@ -308,7 +308,7 @@ try {
     assert.ok(logged, 'Actual Borg MCP persisted a log after the native nested audit nudge');
   }
   assert.ok(!(await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('Heads up:'));
-  const contracts = { permissions: [], dispatcher: [] };
+  const contracts = { permissions: [], dispatcher: [], pacing: [] };
   const runNativeScenario = async (binding, scenario) => {
     const sessionID = binding.sessionID;
     const before = new Set((await nativeClient.message.list({ sessionID, limit: 100 })).data.map(row => row.id));
@@ -326,6 +326,30 @@ try {
         error: result.state.error, content: result.state.content,
         nested: result.state.metadata?.toolCalls?.map(row => ({ tool: row.tool, status: row.status })) });
       console.error(JSON.stringify({ nativeScenario: nativeEvidence.at(-1) }));
+      if (scenario.entry && !scenario.error && !scenario.retried && result.state.status === 'error' && result.state.error?.message.includes('HTTP 429')) {
+        // Observe the remaining window through the same pinned TLS authority
+        // and seat credential. This is fixture pacing, not a client retry rule;
+        // a 429 never satisfies a successful native assertion.
+        const { getActiveCube } = await import('../../dist/cubes.js');
+        const { loadBorgServerTrust } = await import('../../dist/server-trust.js');
+        const active = await getActiveCube();
+        assert.equal(active.droneId, process.env.OPENCODE_TEST_DRONE_ID);
+        assert.equal(active.cubeId, process.env.OPENCODE_TEST_CUBE_ID);
+        const trust = await loadBorgServerTrust(active.apiUrl);
+        assert.equal(trust.identity, active.serverTrustIdentity);
+        const response = await trust.fetchImpl(`${active.apiUrl}/api/cubes/${active.cubeId}/logs/${scenario.entry}`, {
+          headers: { Authorization: `Bearer ${active.sessionToken}` }, signal: AbortSignal.timeout(5000),
+        });
+        const seconds = response.status === 429 ? Number(response.headers.get('retry-after')) : 0;
+        await response.body?.cancel();
+        assert.ok(response.status === 200 || (response.status === 429 && Number.isInteger(seconds) && seconds >= 1 && seconds <= 60),
+          'Owned authority must expose a bounded Retry-After or an already reset window');
+        const remaining = Number(process.env.OPENCODE_TEST_CONTRACT_DEADLINE) - Date.now();
+        assert.ok(seconds * 1000 + 15_000 < remaining, `Rate reset needs ${seconds}s plus native outcome budget; only ${remaining}ms remain`);
+        contracts.pacing.push({ status: response.status, retryAfterSeconds: seconds });
+        await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+        return await runNativeScenario(binding, { ...scenario, id: scenario.id + '-retry', issued: false, attempt: undefined, retried: true });
+      }
       return { result, admitted, advertised: scenario.advertised };
     } finally { nativeScenario = undefined; }
   };
@@ -344,6 +368,11 @@ try {
       if (error) {
         assertError(result);
         assert.throws(() => assertError(successful), 'Actual successful tool result cannot satisfy the error assertion');
+        assert.throws(() => assertError({ ...result, state: { ...result.state, error: undefined, content: [],
+          metadata: { toolCalls: result.state.metadata?.toolCalls?.map(row => ({ tool: row.tool, status: row.status })) } } }),
+          'Removing the actual inner error detail must fail the validator');
+        assert.throws(() => assertError({ ...result, state: { ...result.state, status: 'completed', metadata: {} } }),
+          'Error text without native outer/nested error state is insufficient');
         contracts.dispatcher.push({ mode, outcome: 'error', status: result.state.status });
       } else {
         assert.equal(result.state.status, 'completed');
@@ -363,6 +392,7 @@ try {
     const sessionID = descriptor.sessionID;
     const original = (await nativeClient.session.get({ sessionID })).permissions ?? [];
     const marker = join(directory, 'native-permission-marker');
+    let deniedResult;
     const command = `echo native-permission-proof > '${marker.replace(/'/g, "'\\''")}'`;
     const assertDenied = result => {
       const detail = JSON.stringify(result.state);
@@ -387,8 +417,10 @@ try {
           assert.equal(result.state.status, 'completed');
           assert.equal(readFileSync(marker, 'utf8').trim(), 'native-permission-proof', 'Allowed control executes the same mutation');
           assert.throws(() => assertDenied(result), 'Actual allowed mutation must fail the denial validator');
+          assert.throws(() => assertDenied(deniedResult), 'A refusal accompanied by the real allowed side effect must fail the no-mutation assertion');
         } else {
           assertDenied(result);
+          deniedResult = result;
           assert.match(JSON.stringify(result.state), /denied|No tool named .*currently available|not available|not found|unknown tool|not enabled/i,
             'Refusal is a native permission/tool-availability outcome, not an unrelated generation failure');
         }
