@@ -286,7 +286,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       expect(contracts?.dispatcher).toHaveLength(4);
       for (const call of contracts.dispatcher.filter((call: any) => call.outcome === 'success')) {
         const persisted = await tool(author, 'borg_read_entry', { entry_id: call.entry });
-        expect(persisted.entry.message, `${call.mode} dispatcher mutated the actual Borg log`).toBe(call.message);
+        expect(persisted.entry.message, `${call.mode} dispatcher result agrees with the actual Borg log`).toBe(call.message);
         expect(persisted.entry.drone_id).toBe(seat.droneId);
       }
       for (const row of observations) console.log(JSON.stringify(row));

@@ -183,14 +183,16 @@ const provider = createServer(async (req, res) => {
         } }];
       } else {
         scenario.issued = true;
-        const inner = scenario.error ? { message: 42, to: 'broadcast' } : { message: scenario.message, to: 'broadcast' };
+        const inner = scenario.error ? { message: 42, to: 'broadcast' }
+          : scenario.entry ? { entry_id: scenario.entry } : { message: scenario.message, to: 'broadcast' };
+        const target = scenario.entry && !scenario.error ? 'borg_read_entry' : 'borg_log';
         const name = scenario.kind === 'dispatcher' && direct ? 'borg_borg_tool' : 'execute';
         const code = scenario.kind === 'dispatcher'
-          ? `return await ${dispatcher}({name:'borg_log',arguments:${JSON.stringify(inner)}});`
+          ? `return await ${dispatcher}({name:${JSON.stringify(target)},arguments:${JSON.stringify(inner)}});`
           : `return await ${shellPath}({command:${JSON.stringify(scenario.command)},description:'Native permission side-effect proof'});`;
         if (scenario.kind !== 'dispatcher') assert.ok(shellPath, 'Previously discovered native shell path is available');
         toolCalls = [{ index: 0, id: scenario.id, type: 'function', function: { name,
-          arguments: JSON.stringify(name === 'execute' ? { code } : { name: 'borg_log', arguments: inner }),
+          arguments: JSON.stringify(name === 'execute' ? { code } : { name: target, arguments: inner }),
         } }];
         scenario.attempt = { name, arguments: toolCalls[0].function.arguments };
       }
@@ -336,7 +338,8 @@ try {
     };
     for (const error of [false, true]) {
       const id = `native-dispatcher-${mode}-${error ? 'error' : 'success'}`;
-      const scenario = { id, kind: 'dispatcher', error, message: id };
+      const previous = contracts.dispatcher.find(row => row.mode === 'codemode' && row.outcome === 'success');
+      const scenario = { id, kind: 'dispatcher', error, message: id, ...(mode === 'direct' ? { entry: previous.entry } : {}) };
       const { result } = await runNativeScenario(binding, scenario);
       if (error) {
         assertError(result);
@@ -346,9 +349,12 @@ try {
         assert.equal(result.state.status, 'completed');
         successful = result;
         const text = result.state.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
-        const entry = /(?:"id"\s*:\s*"|entry id: )([0-9a-f-]{36})/.exec(text)?.[1];
+        const entry = mode === 'direct' ? previous.entry : /(?:"id"\s*:\s*"|entry id: )([0-9a-f-]{36})/.exec(text)?.[1];
         assert.ok(entry, 'Real dispatcher returns a persisted log entry identity');
-        contracts.dispatcher.push({ mode, outcome: 'success', entry, message: id });
+        if (mode === 'direct') {
+          assert.ok(text.includes(entry) && text.includes(previous.message), 'Direct dispatcher reads the actual Code Mode-created entry');
+        }
+        contracts.dispatcher.push({ mode, outcome: 'success', entry, message: mode === 'direct' ? previous.message : id });
       }
     }
   };
