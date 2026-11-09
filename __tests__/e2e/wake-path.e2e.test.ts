@@ -277,11 +277,18 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
         OPENCODE_TEST_DRONE_ID: seat.droneId, OPENCODE_TEST_CUBE_ID: cube.cube_id,
       });
       const observations = nativeOutput.trim().split('\n').flatMap(line => {
-        try { const row = JSON.parse(line); return row.wakeRecovery || row.wakeRestart ? [row] : []; }
+        try { const row = JSON.parse(line); return row.wakeRecovery || row.wakeRestart || row.nativeContracts ? [row] : []; }
         catch { return []; }
       });
       expect(observations.some(row => row.wakeRecovery?.asynchronousFailure), 'Native admission/busy/failure cases executed').toBe(true);
       expect(observations.some(row => row.wakeRestart?.recovered), 'Native pending/in-flight restart cases executed').toBe(true);
+      const contracts = observations.find(row => row.nativeContracts)?.nativeContracts;
+      expect(contracts?.dispatcher).toHaveLength(4);
+      for (const call of contracts.dispatcher.filter((call: any) => call.outcome === 'success')) {
+        const persisted = await tool(author, 'borg_read_entry', { entry_id: call.entry });
+        expect(persisted.entry.message, `${call.mode} dispatcher mutated the actual Borg log`).toBe(call.message);
+        expect(persisted.entry.drone_id).toBe(seat.droneId);
+      }
       for (const row of observations) console.log(JSON.stringify(row));
     }
   } finally {

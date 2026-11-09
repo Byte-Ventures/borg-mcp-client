@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, realpathSync, readdirSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, readdirSync, readFileSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
@@ -66,7 +66,8 @@ let audienceIssued = false;
 let failNextGeneration = false;
 let holdNextGeneration = false;
 let releaseGeneration;
-const direct = process.env.OPENCODE_TEST_DIRECT === '1';
+let direct = process.env.OPENCODE_TEST_DIRECT === '1';
+let nativeScenario;
 const pluginDelayMs = Number(process.env.OPENCODE_TEST_PLUGIN_DELAY_MS ?? 0);
 assert.ok(Number.isInteger(pluginDelayMs) && pluginDelayMs >= 0 && pluginDelayMs < 60_000, 'Invalid fixture plugin delay');
 const callsPath = join(root, 'mcp-calls.jsonl');
@@ -166,6 +167,33 @@ const provider = createServer(async (req, res) => {
     assert.ok(direct ? name : api, 'Human session discovers Borg read tool');
     toolCalls = [{ index: 0, id: 'human-handoff-read', type: 'function', function: direct
       ? { name, arguments: '{}' } : { name: 'execute', arguments: JSON.stringify({ code: `return await ${api}({});` }) } }];
+  }
+  if (nativeScenario) {
+    toolCalls = [];
+    const scenario = nativeScenario;
+    scenario.advertised = body.tools?.map(tool => tool.function?.name) ?? [];
+    if (!scenario.issued) {
+      const dispatcher = borgPaths.find(name => /(?:\.borg_tool|\["borg_tool"\])$/.test(name));
+      if (scenario.kind === 'dispatcher' && !direct && !dispatcher) {
+        assert.ok(!scenario.searched, 'Real Borg dispatcher must be discoverable');
+        scenario.searched = true;
+        toolCalls = [{ index: 0, id: scenario.id + '-search', type: 'function', function: {
+          name: 'execute', arguments: JSON.stringify({ code: 'return search({namespace:"tools.borg",query:"borg_tool",limit:100});' }),
+        } }];
+      } else {
+        scenario.issued = true;
+        const inner = scenario.error ? { message: 42, to: 'broadcast' } : { message: scenario.message, to: 'broadcast' };
+        const name = scenario.kind === 'dispatcher' && direct ? 'borg_borg_tool' : 'execute';
+        const code = scenario.kind === 'dispatcher'
+          ? `return await ${dispatcher}({name:'borg_log',arguments:${JSON.stringify(inner)}});`
+          : `return await ${shellPath}({command:${JSON.stringify(scenario.command)},description:'Native permission side-effect proof'});`;
+        if (scenario.kind !== 'dispatcher') assert.ok(shellPath, 'Previously discovered native shell path is available');
+        toolCalls = [{ index: 0, id: scenario.id, type: 'function', function: { name,
+          arguments: JSON.stringify(name === 'execute' ? { code } : { name: 'borg_log', arguments: inner }),
+        } }];
+        scenario.attempt = { name, arguments: toolCalls[0].function.arguments };
+      }
+    }
   }
   const shouldCall = toolCalls.length > 0;
   providerSteps.push({ actionIndex, paths, logPath, shellPath,
@@ -277,6 +305,84 @@ try {
     assert.ok(logged, 'Actual Borg MCP persisted a log after the native nested audit nudge');
   }
   assert.ok(!(await callOpenCodeV2Broker(descriptor, '/context', { sessionID: descriptor.sessionID })).text.includes('Heads up:'));
+  const contracts = { permissions: [], dispatcher: [] };
+  const runNativeScenario = async (binding, scenario) => {
+    const sessionID = binding.sessionID;
+    const before = new Set((await nativeClient.message.list({ sessionID, limit: 100 })).data.map(row => row.id));
+    nativeScenario = scenario;
+    try {
+      const admitted = await callOpenCodeV2Broker(binding, '/wake', { key: scenario.id, source: scenario.id, text: scenario.id });
+      assert.equal(admitted.accepted, true, 'Scenario input admitted independently of tool outcome');
+      await nativeClient.session.wait({ sessionID }, { signal: AbortSignal.timeout(15_000) });
+      assert.ok(scenario.issued && scenario.attempt, 'Provider actually attempted the selected native tool');
+      const rows = (await nativeClient.message.list({ sessionID, limit: 100 })).data.filter(row => !before.has(row.id));
+      const tools = rows.flatMap(row => row.type === 'assistant' ? row.content.filter(part => part.type === 'tool') : []);
+      const result = tools.find(tool => tool.name === scenario.attempt.name);
+      assert.ok(result, 'Native history records the attempted tool outcome');
+      return { result, admitted, advertised: scenario.advertised };
+    } finally { nativeScenario = undefined; }
+  };
+  const proveDispatcher = async (binding, mode) => {
+    let successful;
+    const assertError = result => {
+      assert.equal(result.state.status, 'error', 'Actual Borg isError response propagates through native tool execution');
+      assert.match(JSON.stringify(result.state), /message is required/, 'Real inner borg_log validation rejects the message type');
+    };
+    for (const error of [false, true]) {
+      const id = `native-dispatcher-${mode}-${error ? 'error' : 'success'}`;
+      const scenario = { id, kind: 'dispatcher', error, message: id };
+      const { result } = await runNativeScenario(binding, scenario);
+      if (error) {
+        assertError(result);
+        assert.throws(() => assertError(successful), 'Actual successful tool result cannot satisfy the error assertion');
+        contracts.dispatcher.push({ mode, outcome: 'error', status: result.state.status });
+      } else {
+        assert.equal(result.state.status, 'completed');
+        successful = result;
+        const text = result.state.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
+        const entry = /(?:"id"\s*:\s*"|entry id: )([0-9a-f-]{36})/.exec(text)?.[1];
+        assert.ok(entry, 'Real dispatcher returns a persisted log entry identity');
+        contracts.dispatcher.push({ mode, outcome: 'success', entry, message: id });
+      }
+    }
+  };
+  if (realSeat) {
+    const { applyOpenCodeV2LaunchPermissions } = await import('../../dist/opencode-v2-permissions.js');
+    const sessionID = descriptor.sessionID;
+    const original = (await nativeClient.session.get({ sessionID })).permissions ?? [];
+    const marker = join(directory, 'native-permission-marker');
+    const command = `echo native-permission-proof > '${marker.replace(/'/g, "'\\''")}'`;
+    const assertDenied = result => {
+      assert.equal(result.state.status, 'error', 'Native policy refuses the attempted mutation');
+      assert.equal(existsSync(marker), false, 'Denied outer/nested operation has no filesystem side effect');
+    };
+    try {
+      for (const [label, execute, shell] of [['outer-deny', 'deny', 'allow'], ['nested-deny', 'allow', 'deny'], ['allowed', 'allow', 'allow']]) {
+        assert.equal(existsSync(marker), false, 'No earlier attempt created the mutation marker');
+        await nativeClient.session.update({ sessionID, permissions: [...original,
+          { action: 'execute', resource: '*', effect: execute }, { action: 'shell', resource: '*', effect: shell },
+        ] });
+        // The operator selected preserved policy: unlike normal coordination
+        // approvals, these denials must not be replaced by launch grants.
+        await applyOpenCodeV2LaunchPermissions(nativeClient, sessionID, directory, true);
+        const { result } = await runNativeScenario(descriptor, { id: `native-permission-${label}`, kind: 'mutation', command });
+        if (label === 'allowed') {
+          assert.equal(result.state.status, 'completed');
+          assert.equal(readFileSync(marker, 'utf8').trim(), 'native-permission-proof', 'Allowed control executes the same mutation');
+          assert.throws(() => assertDenied(result), 'Actual allowed mutation must fail the denial validator');
+        } else {
+          assertDenied(result);
+          assert.match(JSON.stringify(result.state), /denied|not available|not found|unknown tool|not enabled/i,
+            'Refusal is a native permission/tool-availability outcome, not an unrelated generation failure');
+        }
+        contracts.permissions.push({ case: label, nativeStatus: result.state.status, mutated: existsSync(marker) });
+      }
+    } finally {
+      await nativeClient.session.update({ sessionID, permissions: original });
+      if (existsSync(marker)) rmSync(marker);
+    }
+    await proveDispatcher(descriptor, 'codemode');
+  }
   if (realSeat) {
     // Failure injection belongs only to the existing CI-only isolated fleet.
     // Admission, materialization and model outcome are separate observations.
@@ -524,6 +630,21 @@ try {
       assert.ok(!(await nativeClient.session.inbox.list({ sessionID })).some(row => row.id === delivery.id), 'Recovered input left the native inbox');
     }
     console.log(JSON.stringify({ wakeRestart: { sessionID, pending: pending.id, inFlight: inFlight.id, recovered: true } }));
+  }
+  if (realSeat) {
+    tui.kill(); await launch.cleanup(); launch = undefined;
+    // Reuse the fixture-owned isolated seat, not a second authority or a new CI
+    // cell. The normal launch overlay still supplies the real Borg command.
+    direct = true;
+    const content = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
+    content.mcp = { servers: { borg: { type: 'local', command: ['user-placeholder'], codemode: false } } };
+    env.OPENCODE_CONFIG_CONTENT = JSON.stringify(content);
+    launch = await launchOpenCodeV2Process(launchOptions);
+    const filename = readdirSync(openCodePrivateRoot()).find(name => /^opencode-v2-[\w-]{43}\.json$/.test(name));
+    const directBinding = readOpenCodeV2Descriptor(join(openCodePrivateRoot(), filename));
+    await nativeClient.session.wait({ sessionID: directBinding.sessionID }, { signal: AbortSignal.timeout(15_000) });
+    await proveDispatcher(directBinding, 'direct');
+    console.log(JSON.stringify({ nativeContracts: contracts }));
   }
   tui.kill(); await launch.cleanup(); launch = undefined;
   await assert.rejects(callOpenCodeV2Broker(descriptor, '/status'));
