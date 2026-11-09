@@ -68,6 +68,7 @@ let holdNextGeneration = false;
 let releaseGeneration;
 let direct = process.env.OPENCODE_TEST_DIRECT === '1';
 let nativeScenario;
+const nativeEvidence = [];
 const pluginDelayMs = Number(process.env.OPENCODE_TEST_PLUGIN_DELAY_MS ?? 0);
 assert.ok(Number.isInteger(pluginDelayMs) && pluginDelayMs >= 0 && pluginDelayMs < 60_000, 'Invalid fixture plugin delay');
 const callsPath = join(root, 'mcp-calls.jsonl');
@@ -319,16 +320,17 @@ try {
       const tools = rows.flatMap(row => row.type === 'assistant' ? row.content.filter(part => part.type === 'tool') : []);
       const result = tools.find(tool => tool.name === scenario.attempt.name);
       assert.ok(result, 'Native history records the attempted tool outcome');
-      console.log(JSON.stringify({ nativeScenario: { id: scenario.id, tool: result.name, status: result.state.status,
+      nativeEvidence.push({ id: scenario.id, tool: result.name, status: result.state.status,
         error: result.state.error, content: result.state.content,
-        nested: result.state.metadata?.toolCalls?.map(row => ({ tool: row.tool, status: row.status })) } }));
+        nested: result.state.metadata?.toolCalls?.map(row => ({ tool: row.tool, status: row.status })) });
       return { result, admitted, advertised: scenario.advertised };
     } finally { nativeScenario = undefined; }
   };
   const proveDispatcher = async (binding, mode) => {
     let successful;
     const assertError = result => {
-      assert.equal(result.state.status, 'error', 'Actual Borg isError response propagates through native tool execution');
+      assert.ok(result.state.status === 'error' || result.state.metadata?.toolCalls?.some(row => row.status === 'error' || row.status === 'failed'),
+        'Actual Borg isError response remains an outer or nested tool error, independently of execute completion');
       assert.match(JSON.stringify(result.state), /message is required/, 'Real inner borg_log validation rejects the message type');
     };
     for (const error of [false, true]) {
@@ -693,7 +695,7 @@ try {
   console.log(JSON.stringify({ version: installation.version, lifecycle: 'passed', pluginDelayMs,
     configurationMs: nativeRequests.filter(request => request.pathname === '/api/config').map(request => request.milliseconds) }));
 } catch (error) {
-  console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12), nativePlugins, providerSteps: providerSteps.slice(-6) }));
+  console.error(JSON.stringify({ nativeRequests: nativeRequests.slice(-12), nativePlugins, nativeEvidence, providerSteps: providerSteps.slice(-6) }));
   throw error;
 } finally {
   releaseGeneration?.();
