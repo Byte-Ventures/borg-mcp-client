@@ -96,6 +96,9 @@ describe('local owner enrollment to restart flow', () => {
           session: { id: sessionId },
         }, 201);
       }
+      if (path === '/api/client/attach/reconcile') {
+        return response({ disposition: 'finalized', drone_id: droneId, session_id: sessionId });
+      }
       if (path === `/api/cubes/${cubeId}` && method === 'GET') {
         return response({ cube: { id: cubeId, name: 'local-cube', cube_directive: 'Local directive' } });
       }
