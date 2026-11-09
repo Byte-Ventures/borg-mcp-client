@@ -372,7 +372,7 @@ try {
           assert.throws(() => assertDenied(result), 'Actual allowed mutation must fail the denial validator');
         } else {
           assertDenied(result);
-          assert.match(JSON.stringify(result.state), /denied|not available|not found|unknown tool|not enabled/i,
+          assert.match(JSON.stringify(result.state), /denied|No tool named .*currently available|not available|not found|unknown tool|not enabled/i,
             'Refusal is a native permission/tool-availability outcome, not an unrelated generation failure');
         }
         contracts.permissions.push({ case: label, nativeStatus: result.state.status, mutated: existsSync(marker) });
