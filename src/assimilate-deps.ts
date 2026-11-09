@@ -551,7 +551,7 @@ export function buildDefaultAssimilateDeps(
             // activation failure so the rerun-from-there resumes the exact operation.
             bindPending: prepared.bindPending,
             reserveTarget: pending.attachmentAttempt === undefined ? undefined :
-              (target: string) => reserveAttachmentTarget(pending.attachmentAttempt!, target),
+              (target: string, failedCollisionTarget?: string) => reserveAttachmentTarget(pending.attachmentAttempt!, target, failedCollisionTarget),
           },
         };
       }

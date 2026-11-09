@@ -190,7 +190,7 @@ export interface AssimilateResult {
     // pending operation and re-sends the identical bearer. Absent for the (severed)
     // unit stubs that fully mock `assimilate`.
     bindPending?: (binding: SeatBinding) => Promise<unknown>;
-    reserveTarget?: (target: string) => Promise<void>;
+    reserveTarget?: (target: string, failedCollisionTarget?: string) => Promise<void>;
   };
   // CR #1: set when the cube-lock-held PREPARE revalidation aborted BEFORE any
   // credential was minted or sent (a reset/binding writer won before PREPARE).
@@ -1379,7 +1379,7 @@ export type WorktreePreparationDeps = Pick<
 >;
 
 export interface WorktreePreparationInput {
-  reserveTarget?: (target: string) => Promise<void>;
+  reserveTarget?: (target: string, failedCollisionTarget?: string) => Promise<void>;
   flags: AssimilateFlags;
   repositoryContext: GitRepositoryContext;
   projectRoot: string;
@@ -1463,8 +1463,9 @@ export async function prepareAssimilationWorktree(
 
   let worktreeResult: ReturnType<AssimilateDeps['runSync']>;
   let residualBranch: string | null = null;
+  let failedCollisionTarget: string | undefined;
   while (true) {
-    try { await input.reserveTarget?.(candidate); }
+    try { await input.reserveTarget?.(candidate, failedCollisionTarget); }
     catch {
       deps.stderr('The attachment target could not be reserved; no worktree was created. Use the printed attachment recovery command.\n');
       return { kind: 'stop', code: 1 };
@@ -1488,6 +1489,9 @@ export async function prepareAssimilationWorktree(
       break;
     }
     registeredWorktrees = refreshed;
+    // Only this immediate failed-add loop can advance its own reservation.
+    // Previously reserved recovery targets never enter this creation loop.
+    failedCollisionTarget = candidate;
     do {
       candidate = computeWorktreePath(homeDir, repoBase, suffix, suffixNumber);
       worktreeBranch = perWorktreeBranchName(basename(candidate), repoBase);

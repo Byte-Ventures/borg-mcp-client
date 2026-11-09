@@ -69,7 +69,7 @@ export interface AssimilateResult {
         activate: (binding: SeatBinding) => Promise<unknown>;
         scrubPending: () => Promise<unknown>;
         bindPending?: (binding: SeatBinding) => Promise<unknown>;
-        reserveTarget?: (target: string) => Promise<void>;
+        reserveTarget?: (target: string, failedCollisionTarget?: string) => Promise<void>;
     };
     prepareAborted?: boolean;
 }
@@ -327,7 +327,7 @@ export interface SeatPreparationOutcome {
 export declare function prepareAssimilationSeat(input: SeatPreparationInput, deps: SeatPreparationDeps): Promise<AssimilationPhaseOutcome<SeatPreparationOutcome>>;
 export type WorktreePreparationDeps = Pick<AssimilateDeps, 'chdir' | 'cwd' | 'homedir' | 'mkdirp' | 'pathExists' | 'runSync' | 'stderr'>;
 export interface WorktreePreparationInput {
-    reserveTarget?: (target: string) => Promise<void>;
+    reserveTarget?: (target: string, failedCollisionTarget?: string) => Promise<void>;
     flags: AssimilateFlags;
     repositoryContext: GitRepositoryContext;
     projectRoot: string;

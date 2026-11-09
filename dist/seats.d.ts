@@ -86,7 +86,7 @@ export declare function readAttachmentAttempt(input: {
     clientId: string;
     worktree: string;
 }): Promise<AttachmentAttempt>;
-export declare function reserveAttachmentTarget(attempt: string, targetWorktree: string): Promise<void>;
+export declare function reserveAttachmentTarget(attempt: string, targetWorktree: string, failedCollisionTarget?: string): Promise<void>;
 export type AttachmentRecoveryState = {
     kind: 'pending';
     entry: AttachmentAttempt;

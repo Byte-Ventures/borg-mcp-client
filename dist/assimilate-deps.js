@@ -457,7 +457,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
                         // activation failure so the rerun-from-there resumes the exact operation.
                         bindPending: prepared.bindPending,
                         reserveTarget: pending.attachmentAttempt === undefined ? undefined :
-                            (target) => reserveAttachmentTarget(pending.attachmentAttempt, target),
+                            (target, failedCollisionTarget) => reserveAttachmentTarget(pending.attachmentAttempt, target, failedCollisionTarget),
                     },
                 };
             }

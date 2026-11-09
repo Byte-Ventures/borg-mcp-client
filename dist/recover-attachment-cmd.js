@@ -147,7 +147,7 @@ async function defaultContext(origin) {
                             ? { worktree: entry.operation.operationKey.slice('named-sibling:'.length) } : {},
                         repositoryContext: source, projectRoot: source.root, wantSibling: true, verifiedHead,
                         assignedRole: { ...prepared.role, is_human_seat: false, is_default: false }, existing: null,
-                        reserveTarget: path => reserveAttachmentTarget(entry.attempt, path),
+                        reserveTarget: (path, failedCollisionTarget) => reserveAttachmentTarget(entry.attempt, path, failedCollisionTarget),
                     }, deps);
                     if (outcome.kind === 'stop' || !outcome.value.spawnedWorktreePath)
                         return false;

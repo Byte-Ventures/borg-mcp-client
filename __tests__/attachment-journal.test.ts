@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { deriveAttachmentReceipt, ErrorCode } from 'borgmcp-shared';
@@ -46,6 +46,115 @@ it('commits the receipt and pending credential together and retries with the sam
   const disk = JSON.parse(readFileSync(seats.SEATS_FILE, 'utf8'));
   expect(disk.seats[seats.seatRef(seed)].attachmentAttempt).toBe(journal.attempt);
   expect(JSON.stringify(disk.attachments)).not.toContain(seed.credential);
+});
+
+it.each(['ordinary', 'recovery'])('confirms PREPARE durability before %s retry send after continuous post-rename failure', async mode => {
+  const seats = await load();
+  const fs = await import('../src/guarded-fs.js');
+  const open = fs.open;
+  const fault = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+    if (args[0] === dirname(seats.SEATS_FILE) && args[1] === 'r') throw new Error('continuous PREPARE sync failure');
+    return open(...args);
+  });
+  await expect(seats.prepareSeat({ expected: { kind: 'absent' }, seed, attachment })).rejects.toThrow('continuous PREPARE');
+  const attempt = attemptOf(seats);
+  const persisted = readFileSync(seats.SEATS_FILE, 'utf8');
+  const send = vi.fn(async () => true);
+  const { runRecoverAttachment } = await import('../src/recover-attachment-cmd.js');
+  const deps = { context: async () => ({ ...lookup, reconcile: vi.fn(), resume: send }),
+    isTTY: () => false, prompt: vi.fn(), stdout: vi.fn(), stderr: vi.fn() };
+  if (mode === 'ordinary') {
+    await expect(seats.prepareSeat({ expected: { kind: 'absent' }, seed: { ...seed, credential: 'B'.repeat(43) }, attachment })
+      .then(result => { if (result.ok) return send(); })).rejects.toThrow('continuous PREPARE');
+  } else {
+    expect(await runRecoverAttachment({ host: seed.origin, attempt }, deps)).toBe(1);
+  }
+  expect(send).not.toHaveBeenCalled();
+  expect(readFileSync(seats.SEATS_FILE, 'utf8')).toBe(persisted);
+  fault.mockRestore();
+  const restored = await seats.prepareSeat({ expected: { kind: 'absent' }, seed: { ...seed, credential: 'B'.repeat(43) }, attachment });
+  expect(restored).toMatchObject({ ok: true, record: { credential: seed.credential, attachmentAttempt: attempt } });
+  expect(await runRecoverAttachment({ host: seed.origin, attempt }, deps)).toBe(0);
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(await seats.readAttachmentAttempt({ ...lookup, attempt })).toMatchObject({ receipt: await deriveAttachmentReceipt(seed.credential) });
+});
+
+it('retries an immediate branch collision with the real journal reservation and the same generation', async () => {
+  const seats = await load();
+  await seats.prepareSeat({ expected: { kind: 'absent' }, seed, attachment });
+  const attempt = attemptOf(seats);
+  const { prepareAssimilationWorktree } = await import('../src/assimilate-cmd.js');
+  let adds = 0;
+  let cwd = '/work/source';
+  const runSync = vi.fn((_command: string, args: string[]) => {
+    if (args[0] === 'remote') return { status: 1, stdout: '', stderr: '' };
+    if (args[0] === 'worktree' && args[1] === 'list') return { status: 0, stderr: '', stdout:
+      'worktree /work/source\nbranch refs/heads/main\n' + (adds ? '\nworktree /legacy/slot\nbranch refs/heads/wt-review-1\n' : '') };
+    if (args[0] === 'worktree' && args[1] === 'add') return ++adds === 1
+      ? { status: 128, stdout: '', stderr: "fatal: a branch named 'wt-review-1' already exists" }
+      : { status: 0, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse' && args[3]?.startsWith('refs/heads/')) return {
+      status: adds && args[3] === 'refs/heads/wt-review-1' ? 0 : 1, stdout: '', stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  });
+  const outcome = await prepareAssimilationWorktree({ flags: { worktree: 'review-1' },
+    repositoryContext: { root: cwd, commonDir: '/work/myrepo/.git', publicRepository: null }, projectRoot: cwd,
+    wantSibling: true, verifiedHead: 'abcdef', assignedRole: { name: 'Builder' }, existing: null,
+    reserveTarget: (target: string, previous?: string) => seats.reserveAttachmentTarget(attempt, target, previous),
+  } as any, { runSync, homedir: () => process.env.HOME!, pathExists: () => false, mkdirp: vi.fn(),
+    chdir: (target: string) => { cwd = target; }, cwd: () => cwd, stderr: vi.fn() } as any);
+  expect(outcome.kind).toBe('continue');
+  expect(adds).toBe(2);
+  expect(await seats.readAttachmentAttempt({ ...lookup, attempt })).toMatchObject({ attempt,
+    targetWorktree: join(process.env.HOME!, '.borg/worktrees/myrepo/review-1-2'), disposition: 'unresolved' });
+  expect(JSON.parse(readFileSync(seats.SEATS_FILE, 'utf8')).seats[seats.seatRef(seed)].credential).toBe(seed.credential);
+});
+
+it.each(['reset', 'replacement', 'active', 'newer-reservation', 'other-reservation', 'old-target-exists', 'new-target-exists', 'unconsented-retarget'])(
+  'refuses collision reservation advancement after %s without overwriting state', async change => {
+    const seats = await load();
+    await seats.prepareSeat({ expected: { kind: 'absent' }, seed, attachment });
+    const attempt = attemptOf(seats);
+    const first = join(process.env.HOME!, 'first');
+    const second = join(process.env.HOME!, 'second');
+    await seats.reserveAttachmentTarget(attempt, first);
+    if (change === 'reset' || change === 'replacement') await seats.clearSeat(seats.seatRef(seed));
+    if (change === 'replacement') await seats.mintPendingSeat({ ...seed, credential: 'B'.repeat(43) });
+    if (change === 'active') await seats.activateAndBindSeat({ ...activation, worktree: first, acknowledge: async () => {} });
+    if (change === 'newer-reservation') await seats.reserveAttachmentTarget(attempt, join(process.env.HOME!, 'newer'), first);
+    if (change === 'other-reservation') {
+      const other = await seats.prepareSeat({ expected: { kind: 'absent' }, attachment,
+        seed: { ...seed, credential: 'C'.repeat(43), operation: { ...seed.operation, operationKey: 'named-sibling:other' } } });
+      if (!other.ok) throw new Error('fixture prepare failed');
+      await seats.reserveAttachmentTarget(other.record.attachmentAttempt!, second);
+    }
+    if (change === 'old-target-exists') mkdirSync(first);
+    if (change === 'new-target-exists') mkdirSync(second);
+    const before = readFileSync(seats.SEATS_FILE, 'utf8');
+    await expect(seats.reserveAttachmentTarget(attempt, second, change === 'unconsented-retarget' ? undefined : first)).rejects.toThrow(/target changed/);
+    expect(readFileSync(seats.SEATS_FILE, 'utf8')).toBe(before);
+  });
+
+it('stops collision advancement on durability ambiguity and refuses a stale previous target', async () => {
+  const seats = await load();
+  await seats.prepareSeat({ expected: { kind: 'absent' }, seed, attachment });
+  const attempt = attemptOf(seats);
+  const first = join(process.env.HOME!, 'first');
+  const second = join(process.env.HOME!, 'second');
+  await seats.reserveAttachmentTarget(attempt, first);
+  const fs = await import('../src/guarded-fs.js');
+  const open = fs.open;
+  const fault = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+    if (args[0] === dirname(seats.SEATS_FILE) && args[1] === 'r') throw new Error('collision sync fault');
+    return open(...args);
+  });
+  const add = vi.fn();
+  await expect(seats.reserveAttachmentTarget(attempt, second, first).then(add)).rejects.toThrow('collision sync fault');
+  expect(add).not.toHaveBeenCalled();
+  fault.mockRestore();
+  const before = readFileSync(seats.SEATS_FILE, 'utf8');
+  await expect(seats.reserveAttachmentTarget(attempt, join(process.env.HOME!, 'third'), first)).rejects.toThrow(/target changed/);
+  expect(readFileSync(seats.SEATS_FILE, 'utf8')).toBe(before);
 });
 
 it('keeps missing-generation cleanup intent and blocks a new implicit key or role without writing', async () => {

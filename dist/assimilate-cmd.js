@@ -765,9 +765,10 @@ export async function prepareAssimilationWorktree(input, deps) {
     }
     let worktreeResult;
     let residualBranch = null;
+    let failedCollisionTarget;
     while (true) {
         try {
-            await input.reserveTarget?.(candidate);
+            await input.reserveTarget?.(candidate, failedCollisionTarget);
         }
         catch {
             deps.stderr('The attachment target could not be reserved; no worktree was created. Use the printed attachment recovery command.\n');
@@ -792,6 +793,9 @@ export async function prepareAssimilationWorktree(input, deps) {
             break;
         }
         registeredWorktrees = refreshed;
+        // Only this immediate failed-add loop can advance its own reservation.
+        // Previously reserved recovery targets never enter this creation loop.
+        failedCollisionTarget = candidate;
         do {
             candidate = computeWorktreePath(homeDir, repoBase, suffix, suffixNumber);
             worktreeBranch = perWorktreeBranchName(basename(candidate), repoBase);

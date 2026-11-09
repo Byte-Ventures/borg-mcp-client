@@ -283,13 +283,16 @@ export async function readAttachmentAttempt(input) {
     }
     return entry;
 }
-export async function reserveAttachmentTarget(attempt, targetWorktree) {
+export async function reserveAttachmentTarget(attempt, targetWorktree, failedCollisionTarget) {
     await withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
         const entry = txn.data.attachments[String(attempt)];
         const record = entry && txn.data.seats[entry.credentialRef];
         if (!entry || !record || record.attachmentAttempt !== attempt || record.state !== 'pending' ||
             entry.pendingDigest !== digestOf(record.credential) || entry.disposition !== 'unresolved' ||
-            (entry.targetWorktree !== undefined && entry.targetWorktree !== targetWorktree) ||
+            (failedCollisionTarget === undefined
+                ? entry.targetWorktree !== undefined && entry.targetWorktree !== targetWorktree
+                : entry.targetWorktree !== failedCollisionTarget || record.worktree !== undefined ||
+                    !await absentAttachmentTarget(failedCollisionTarget) || !await absentAttachmentTarget(targetWorktree)) ||
             Object.values(txn.data.attachments).some(other => other.attempt !== attempt && other.targetWorktree === targetWorktree &&
                 other.disposition !== 'finalized' && other.disposition !== 'retired') ||
             Object.values(txn.data.seats).some(candidate => candidate !== record && candidate.worktree === targetWorktree)) {
@@ -356,6 +359,9 @@ export async function recoverAttachmentAttempt(input) {
             if (!absentTarget) {
                 if (input.retire)
                     throw new Error('The original pending connection still exists; retry attachment recovery without --retire');
+                // Observed bytes may have survived a failed post-rename sync. Confirm
+                // this exact PREPARE durably before returning a network-capable retry.
+                await txn.commit();
                 return { kind: 'pending', entry, record };
             }
             // A reservation-before-add crash and an operator-removed target are
@@ -600,6 +606,10 @@ export async function prepareSeat(input) {
             // (a lost-response retry, a crash-in-gap pending, or an active reattach).
             if (input.attachment && existing.attachmentAttempt === undefined) {
                 await journalPendingAttachment(txn.data, existing, input.attachment);
+            }
+            if (existing.attachmentAttempt !== undefined) {
+                // A previous PREPARE may have renamed successfully and failed sync.
+                // Reusing its bearer still requires confirmed durability before send.
                 await txn.commit();
             }
             return { ok: true, record: existing };
