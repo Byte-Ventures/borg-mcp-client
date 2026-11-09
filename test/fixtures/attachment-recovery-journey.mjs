@@ -5,6 +5,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, symlink, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 
 if (process.env.BORG_E2E !== '1' || process.env.CI !== 'true' || process.platform !== 'linux') {
   throw new Error('Attachment fault/recovery execution is restricted to opt-in Linux CI');
@@ -70,7 +72,7 @@ if (input.mode === 'crash-refusal' || input.mode === 'crash-retry') {
   process.exit(0);
 }
 const observations = [];
-for (const scenario of input.mode === 'crash-prepare' ? ['crash'] : ['reuse', 'unreserved-sibling', 'missing', 'replaced', 'reserved-target-absent']) {
+for (const scenario of input.mode === 'crash-prepare' ? ['crash'] : ['reuse', 'unreserved-sibling', 'after-rename', 'ack-loss', 'missing', 'replaced', 'reserved-target-absent']) {
   const source = join(input.worktree, scenario);
   await mkdir(source, { recursive: true });
   assert.equal((await run('git', ['init', '-q', source], source)).code, 0);
@@ -94,18 +96,49 @@ for (const scenario of input.mode === 'crash-prepare' ? ['crash'] : ['reuse', 'u
   const prepared = await handshake.sendBorgServerAttach(input.origin, trust.identity, parent.credential, {
     cubeId: input.cubeId, roleId: input.roleId, operation,
   }, pending.record.credential, { fetchImpl: trust.fetchImpl,
+    ...(scenario === 'ack-loss' ? { acknowledge: async entry => {
+      await handshake.acknowledgeBorgServerAttachment(entry, parent.credential, trust.fetchImpl);
+      throw new Error('Injected lost ACK response after server commit');
+    } } : {}),
     ...(['reuse', 'unreserved-sibling', 'reserved-target-absent', 'crash'].includes(scenario)
       ? { activateAndBind: async () => { throw new Error('Injected local finalization failure before commit'); } } : {}),
   });
   const journal = await seats.readAttachmentAttempt({ attempt, origin: input.origin, trustIdentity: trust.identity,
     clientId: parent.clientId, worktree: source });
   assert.equal((await inspect(journal)).disposition, 'accepted');
-  if (scenario === 'missing' || scenario === 'replaced') await seats.clearSeat(prepared.credentialRef);
+  if (scenario === 'after-rename' || scenario === 'ack-loss') {
+    if (prepared.initialLogCursor) {
+      const { advanceLocalServerCursor } = await load('local-server-cursor.js');
+      const binding = { origin: input.origin, trustIdentity: trust.identity, cubeId: input.cubeId, droneId: prepared.drone.id };
+      await advanceLocalServerCursor(binding, prepared.initialLogCursor);
+      await advanceLocalServerCursor({ ...binding, purpose: 'stream' }, prepared.initialLogCursor);
+    }
+  }
+  if (scenario === 'missing' || scenario === 'replaced') {
+    assert.equal(await prepared.bindPending({ worktree: source, commonDir: repository.commonDir,
+      name: prepared.cube.name, droneLabel: prepared.drone.label }), 'bound');
+    const observation = await seats.observeSeat(prepared.credentialRef,
+      { origin: input.origin, trustIdentity: trust.identity, cubeId: input.cubeId });
+    assert.equal((await seats.resetSeatForWorktree({ worktree: source, ref: prepared.credentialRef, observation })).outcome, 'reset');
+  }
   if (scenario === 'replaced') await seats.mintPendingSeat({ ...seed, credential: randomBytes(32).toString('base64url') });
   let printed = '';
   let removed = false;
   let bindOutcome;
-  const outcome = await finalizeAssimilationSeat({
+  let renameFaults = 0;
+  const originalRename = fsPromises.rename;
+  if (scenario === 'after-rename') {
+    fsPromises.rename = async (from, to) => {
+      await originalRename(from, to);
+      if (to === seats.SEATS_FILE && renameFaults++ < 2) {
+        throw new Error('Injected post-rename durability ambiguity');
+      }
+    };
+    syncBuiltinESMExports();
+  }
+  let outcome;
+  try {
+  outcome = await finalizeAssimilationSeat({
     activeCube: { cubeId: input.cubeId, droneId: prepared.drone.id, name: prepared.cube.name, droneLabel: prepared.drone.label,
       apiUrl: input.origin, localSessionCredentialRef: prepared.credentialRef },
     apiUrl: input.origin, repositoryContext: repository, sessionExpected: { kind: 'absent' },
@@ -120,8 +153,14 @@ for (const scenario of input.mode === 'crash-prepare' ? ['crash'] : ['reuse', 'u
       } catch { bindOutcome = 'injected-before-commit'; }
       return bindOutcome === 'activated' ? { committed: true } : { committed: false, reason: 'activation-failed' };
     } });
+  } finally {
+    fsPromises.rename = originalRename;
+    syncBuiltinESMExports();
+  }
   assert.equal(outcome.kind, 'stop');
-  assert.equal(bindOutcome, scenario === 'missing' ? 'missing' : scenario === 'replaced' ? 'replaced' : 'injected-before-commit');
+  assert.equal(bindOutcome, scenario === 'missing' ? 'missing' : scenario === 'replaced' ? 'replaced' :
+    scenario === 'after-rename' ? 'indeterminate' : scenario === 'ack-loss' ? 'ack-pending' : 'injected-before-commit');
+  if (scenario === 'after-rename') assert.equal(renameFaults, 2);
   assert.equal(removed, false);
   const command = printed.match(/Run: (borg recover-attachment[^\n]+)/)?.[1];
   assert.ok(command, 'Execute the real finalizer-printed command, never a reconstructed command');
@@ -131,15 +170,15 @@ for (const scenario of input.mode === 'crash-prepare' ? ['crash'] : ['reuse', 'u
   }
   const before = await readFile(seats.SEATS_FILE, 'utf8');
   const first = await run('/bin/sh', ['-c', command], source);
-  if (scenario === 'reuse' || scenario === 'unreserved-sibling') {
+  if (['reuse', 'unreserved-sibling', 'after-rename', 'ack-loss'].includes(scenario)) {
     assert.equal(first.code, 0, first.stderr);
-    assert.match(first.stdout, /original drone and session were reused/);
+    assert.match(first.stdout, scenario === 'after-rename' || scenario === 'ack-loss' ? /already active/ : /original drone and session were reused/);
     const finalized = await inspect(journal);
     assert.deepEqual(finalized, { disposition: 'finalized', drone_id: prepared.drone.id, session_id: prepared.session.sessionId });
     const after = await seats.readAttachmentAttempt({ attempt, origin: input.origin, trustIdentity: trust.identity,
       clientId: parent.clientId, worktree: source });
     assert.ok(after.targetWorktree);
-    if (scenario === 'reuse') assert.equal(after.targetWorktree, source, 'In-place intent must not create a sibling');
+    if (scenario !== 'unreserved-sibling') assert.equal(after.targetWorktree, source, 'In-place intent must not create a sibling');
     else assert.notEqual(after.targetWorktree, source, 'Sibling intent must not overwrite its source binding');
     assert.equal((await resolveGitRepositoryContext(after.targetWorktree)).commonDir, repository.commonDir);
     assert.equal((await seats.getActiveSeatForWorktree(after.targetWorktree)).droneId, prepared.drone.id);

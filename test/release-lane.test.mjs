@@ -44,7 +44,7 @@ const root = resolve(import.meta.dirname, '..');
 const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const sharedVersion = packageManifest.dependencies['borgmcp-shared'];
 const SHARED_TARBALL = `https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-${sharedVersion}.tgz`;
-const SHARED_INTEGRITY = 'sha512-rCl2J0Z06B2/vCUVPZOFQj/dSCPMjPFehEruGQMP6JILwE2aBTp1hF2K5p5qzTkKi4ztjjUasIvWXGMSiCpw1w==';
+const SHARED_INTEGRITY = 'sha512-/v2HlUm9+eMYipKYYXDng7uVRdaCjdCOyzm+Ep8hwIJl41VcN4IL8+TB0MHc67to/PhAnFgQyBmzInTWOqTsqw==';
 
 const RELEASE_NOTES = 'Curated tagged release notes.\n\n- Exact shipped work.';
 const RELEASE_INTEGRITY = `sha512-${Buffer.alloc(64, 1).toString('base64')}`;

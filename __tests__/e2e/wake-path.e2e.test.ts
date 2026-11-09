@@ -300,7 +300,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       { ...recoveryInput, mode: 'enroll', invitation: invitations[10] }));
     await run([serverEntry, 'client-grant', recoveryEnrollment.clientId, cube.cube_id, 'write'], serverEnv);
     const recovery = JSON.parse(await run([join(root, 'test/fixtures/attachment-recovery-journey.mjs')], recoveryEnv, recoveryInput));
-    expect(recovery.attachmentRecovery.map((row: any) => row.scenario)).toEqual(['reuse', 'unreserved-sibling', 'missing', 'replaced', 'reserved-target-absent']);
+    expect(recovery.attachmentRecovery.map((row: any) => row.scenario)).toEqual(['reuse', 'unreserved-sibling', 'after-rename', 'ack-loss', 'missing', 'replaced', 'reserved-target-absent']);
     expect(recovery.attachmentRecovery.every((row: any) => row.recovered)).toBe(true);
     console.log(JSON.stringify(recovery));
     if (process.env.OPENCODE_TEST_V2_BINARY) {
