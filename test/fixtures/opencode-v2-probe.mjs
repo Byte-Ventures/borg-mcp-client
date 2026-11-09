@@ -319,6 +319,9 @@ try {
       const tools = rows.flatMap(row => row.type === 'assistant' ? row.content.filter(part => part.type === 'tool') : []);
       const result = tools.find(tool => tool.name === scenario.attempt.name);
       assert.ok(result, 'Native history records the attempted tool outcome');
+      console.log(JSON.stringify({ nativeScenario: { id: scenario.id, tool: result.name, status: result.state.status,
+        error: result.state.error, content: result.state.content,
+        nested: result.state.metadata?.toolCalls?.map(row => ({ tool: row.tool, status: row.status })) } }));
       return { result, admitted, advertised: scenario.advertised };
     } finally { nativeScenario = undefined; }
   };
@@ -353,7 +356,9 @@ try {
     const marker = join(directory, 'native-permission-marker');
     const command = `echo native-permission-proof > '${marker.replace(/'/g, "'\\''")}'`;
     const assertDenied = result => {
-      assert.equal(result.state.status, 'error', 'Native policy refuses the attempted mutation');
+      const detail = JSON.stringify(result.state);
+      assert.ok(result.state.status === 'error' || /Unknown tool 'shell'/.test(detail),
+        'Native outer error or unavailable nested shell refuses the attempted mutation');
       assert.equal(existsSync(marker), false, 'Denied outer/nested operation has no filesystem side effect');
     };
     try {
@@ -365,6 +370,9 @@ try {
         // The operator selected preserved policy: unlike normal coordination
         // approvals, these denials must not be replaced by launch grants.
         await applyOpenCodeV2LaunchPermissions(nativeClient, sessionID, directory, true);
+        const decisions = await Promise.all(['execute', 'shell'].map(action =>
+          nativeClient.permission.create({ sessionID, agent: 'build', action, resources: ['*'] })));
+        assert.deepEqual(decisions.map(row => row.effect), [execute, shell], 'Native effective policy retains the selected denials');
         const { result } = await runNativeScenario(descriptor, { id: `native-permission-${label}`, kind: 'mutation', command });
         if (label === 'allowed') {
           assert.equal(result.state.status, 'completed');
@@ -375,7 +383,7 @@ try {
           assert.match(JSON.stringify(result.state), /denied|No tool named .*currently available|not available|not found|unknown tool|not enabled/i,
             'Refusal is a native permission/tool-availability outcome, not an unrelated generation failure');
         }
-        contracts.permissions.push({ case: label, nativeStatus: result.state.status, mutated: existsSync(marker) });
+        contracts.permissions.push({ case: label, decisions: decisions.map(row => row.effect), nativeStatus: result.state.status, mutated: existsSync(marker) });
       }
     } finally {
       await nativeClient.session.update({ sessionID, permissions: original });
