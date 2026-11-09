@@ -292,7 +292,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     const recoveryHome = join(temporary, 'attachment-recovery');
     const recoveryWorktree = join(recoveryHome, 'repositories');
     await mkdir(join(recoveryHome, 'tmp'), { recursive: true });
-    const recoveryEnv = { ...process.env, HOME: recoveryHome, BORG_STATE_ROOT: recoveryHome,
+    const recoveryEnv = { ...process.env, HOME: recoveryHome, BORG_STATE_ROOT: recoveryHome, BORG_SERVER_DATA_DIR: data,
       XDG_CONFIG_HOME: join(recoveryHome, '.config'), TMPDIR: join(recoveryHome, 'tmp') };
     const recoveryInput = { clientRoot: root, origin: recoveryOrigin, name: 'attachment-recovery', worktree: recoveryWorktree,
       cubeId: cube.cube_id, roleId: cube.default_worker_role_id };
