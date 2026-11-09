@@ -323,6 +323,7 @@ try {
       nativeEvidence.push({ id: scenario.id, tool: result.name, status: result.state.status,
         error: result.state.error, content: result.state.content,
         nested: result.state.metadata?.toolCalls?.map(row => ({ tool: row.tool, status: row.status })) });
+      console.error(JSON.stringify({ nativeScenario: nativeEvidence.at(-1) }));
       return { result, admitted, advertised: scenario.advertised };
     } finally { nativeScenario = undefined; }
   };

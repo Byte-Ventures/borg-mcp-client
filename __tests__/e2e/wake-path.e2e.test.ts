@@ -53,7 +53,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     child.stdout!.on('data', (data) => { stdout += data; });
     child.stderr!.on('data', (data) => { stderr += data; });
     child.stdin!.end(input === undefined ? undefined : JSON.stringify(input));
-    const [code] = await once(child, 'exit');
+    const [code] = await once(child, 'close');
     if (code !== 0) throw new Error(`Fixture subprocess exited ${code}: ${stderr}`);
     return stdout;
   };
