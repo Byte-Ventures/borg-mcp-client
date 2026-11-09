@@ -330,9 +330,10 @@ try {
         // Observe the remaining window through the same pinned TLS authority
         // and seat credential. This is fixture pacing, not a client retry rule;
         // a 429 never satisfies a successful native assertion.
-        const { getActiveCube } = await import('../../dist/cubes.js');
+        const { getActiveCubeForWorktree } = await import('../../dist/cubes.js');
         const { loadBorgServerTrust } = await import('../../dist/server-trust.js');
-        const active = await getActiveCube();
+        const active = await getActiveCubeForWorktree(directory);
+        assert.ok(active, 'Pacing uses the existing fixture worktree binding');
         assert.equal(active.droneId, process.env.OPENCODE_TEST_DRONE_ID);
         assert.equal(active.cubeId, process.env.OPENCODE_TEST_CUBE_ID);
         const trust = await loadBorgServerTrust(active.apiUrl);
