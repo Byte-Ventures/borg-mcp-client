@@ -119,7 +119,8 @@ for (const scenario of input.mode === 'crash-prepare' ? ['crash'] : ['reuse', 'u
       name: prepared.cube.name, droneLabel: prepared.drone.label }), 'bound');
     const observation = await seats.observeSeat(prepared.credentialRef,
       { origin: input.origin, trustIdentity: trust.identity, cubeId: input.cubeId });
-    assert.equal((await seats.resetSeatForWorktree({ worktree: source, ref: prepared.credentialRef, observation })).outcome, 'reset');
+    assert.equal((await seats.resetSeatForWorktree({ worktree: source, ref: prepared.credentialRef,
+      droneId: prepared.drone.id, observation })).outcome, 'reset');
   }
   if (scenario === 'replaced') await seats.mintPendingSeat({ ...seed, credential: randomBytes(32).toString('base64url') });
   let printed = '';
