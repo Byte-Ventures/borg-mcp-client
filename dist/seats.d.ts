@@ -13,9 +13,10 @@
  *
  * The single store flock (seat-store.withStore) serializes every read-compare-
  * write; there is no second lock and no composite. The raw bearer rests ONLY in
- * the 0600 file and is never returned past this module except by the sole
- * hydration reader; every other observation is digest-only.
+ * the 0600 file and is returned only to the attach sender or active hydration
+ * reader; identity observations are digest-only.
  */
+import { type ReconcileAttachmentAction, type ReconcileAttachmentResponse } from 'borgmcp-shared';
 export declare const SEATS_FILE: string;
 export interface SeatOperation {
     projectRoot: string;
@@ -31,6 +32,7 @@ export interface SeatRecord {
     operation: SeatOperation;
     credential: string;
     state: 'pending' | 'active';
+    attachmentAttempt?: string;
     /** Monotonic store-local order assigned when this record is bound active. */
     bindingOrder?: number;
     droneId?: string;
@@ -44,6 +46,31 @@ export interface SeatRecord {
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;
 }
+export interface AttachmentAttempt {
+    attempt: string;
+    receipt: string;
+    origin: string;
+    trustIdentity: string;
+    clientId: string;
+    cubeId: string;
+    roleId: string;
+    priorDroneId?: string;
+    credentialRef: string;
+    pendingDigest: string;
+    operation: SeatOperation;
+    targetWorktree?: string;
+    disposition: 'unresolved' | 'ack-pending' | 'finalized' | 'cleanup-only' | 'retired';
+    droneId?: string;
+    sessionId?: string;
+}
+export declare class AttachmentRecoveryRequiredError extends Error {
+    readonly attempt: string;
+    constructor(attempt: string, origin: string);
+}
+export declare class AttachmentAttemptUnavailableError extends Error {
+    constructor();
+}
+export declare function isAttachmentAttempt(value: unknown): value is string;
 /** The deterministic per-seat ref (identical algorithm to the retired keychain account). */
 export declare function seatRef(input: {
     origin: string;
@@ -52,6 +79,37 @@ export declare function seatRef(input: {
     roleId: string;
     operation: SeatOperation;
 }): string;
+export declare function readAttachmentAttempt(input: {
+    attempt: string;
+    origin: string;
+    trustIdentity: string;
+    clientId: string;
+    worktree: string;
+}): Promise<AttachmentAttempt>;
+export declare function reserveAttachmentTarget(attempt: string, targetWorktree: string): Promise<void>;
+export type AttachmentRecoveryState = {
+    kind: 'pending';
+    entry: AttachmentAttempt;
+    record: SeatRecord;
+} | {
+    kind: 'active' | 'retired' | 'cleanup-only' | 'target-missing';
+};
+/** Recovery owns the same flock as reset/finalize; remote callbacks must be bounded
+ * and must not call another seat-store transaction. */
+export declare function recoverAttachmentAttempt(input: {
+    attempt: string;
+    origin: string;
+    trustIdentity: string;
+    clientId: string;
+    worktree: string;
+    retire: boolean;
+    expected?: {
+        observation: SeatObservation;
+        targetWorktree?: string;
+    };
+    targetAbsent?: (target: string) => Promise<boolean>;
+    reconcile: (entry: AttachmentAttempt, action: ReconcileAttachmentAction) => Promise<ReconcileAttachmentResponse>;
+}): Promise<AttachmentRecoveryState>;
 export declare class AmbiguousSeatBindingError extends Error {
     constructor(worktree: string);
 }
@@ -134,6 +192,11 @@ export type PrepareSeatOutcome = {
  */
 export declare function prepareSeat(input: {
     expected: SeatExpectation;
+    attachment?: {
+        clientId: string;
+        priorDroneId?: string;
+        targetWorktree?: string;
+    };
     /** Default true. When false (a fresh sibling target key that cannot yet hold a
      *  record) the mint runs under the flock but no expectation is revalidated. */
     revalidate?: boolean;
@@ -149,7 +212,7 @@ export declare function prepareSeat(input: {
         credential: string;
     };
 }): Promise<PrepareSeatOutcome>;
-export type ActivateSeatOutcome = 'activated' | 'missing' | 'replaced';
+export type ActivateSeatOutcome = 'activated' | 'missing' | 'replaced' | 'ack-pending' | 'indeterminate';
 /** The worktree binding + display supplied at FINALIZE (known only once the target
  *  worktree is decided). Merged atomically with activation by activateAndBindSeat. */
 export interface SeatBinding {
@@ -190,6 +253,7 @@ export declare function activateAndBindSeat(input: {
     roleName?: string;
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;
+    acknowledge?: (attempt: AttachmentAttempt) => Promise<void>;
 }): Promise<ActivateSeatOutcome>;
 export type BindPendingSeatOutcome = 'bound' | 'missing' | 'replaced';
 /**

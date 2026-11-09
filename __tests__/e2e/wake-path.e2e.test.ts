@@ -47,7 +47,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     const timer = setTimeout(() => child.kill('SIGKILL'), 2000);
     try { await exited; } finally { clearTimeout(timer); }
   };
-  const run = async (args: string[], env: NodeJS.ProcessEnv, input?: unknown) => {
+  const run = async (args: string[], env: NodeJS.ProcessEnv, input?: unknown, expectedCode = 0) => {
     const child = spawn(process.execPath, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
     children.push(child);
     let stdout = ''; let stderr = '';
@@ -55,7 +55,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     child.stderr!.on('data', (data) => { stderr += data; });
     child.stdin!.end(input === undefined ? undefined : JSON.stringify(input));
     const [code] = await once(child, 'close');
-    if (code !== 0) throw new Error(`Fixture subprocess exited ${code}: ${stderr}`);
+    if (code !== expectedCode) throw new Error(`Fixture subprocess exited ${code}: ${stderr}`);
     return stdout;
   };
   const tool = async (seat: any, name: string, args = {}) => {
@@ -104,9 +104,32 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       for (const socket of replayConnections) socket.destroy();
       await new Promise<void>((resolve) => replayProxy.close(() => resolve()));
     });
+    // This dedicated TLS pass-through measures attempted network activity from
+    // the crash recovery command; it never decrypts or records credentials.
+    let recoveryConnectionCount = 0;
+    const recoveryConnections = new Set<ReturnType<typeof createConnection>>();
+    const recoveryProxy = createServer((downstream) => {
+      recoveryConnectionCount++;
+      const upstream = createConnection({ host: '127.0.0.1', port });
+      for (const socket of [downstream, upstream]) {
+        recoveryConnections.add(socket);
+        socket.on('error', () => { downstream.destroy(); upstream.destroy(); });
+        socket.on('close', () => { recoveryConnections.delete(socket); downstream.destroy(); upstream.destroy(); });
+      }
+      downstream.pipe(upstream); upstream.pipe(downstream);
+    });
+    recoveryProxy.listen(0, '127.0.0.1'); await once(recoveryProxy, 'listening');
+    const recoveryPort = (recoveryProxy.address() as any).port;
+    const recoveryOrigin = `https://127.0.0.1:${recoveryPort}`;
+    const closeRecoveryProxy = async () => {
+      for (const socket of recoveryConnections) socket.destroy();
+      await new Promise<void>((resolve) => recoveryProxy.close(() => resolve()));
+    };
+    cleanups.push(closeRecoveryProxy);
     const invitations: string[] = [];
-    for (let index = 0; index < 10; index++) {
-      invitations.push(setup.authority.createInvitationArtifactForOwnerCredential(owner.credential, 900_000, index === 3 ? replayOrigin : origin,
+    for (let index = 0; index < 11; index++) {
+      invitations.push(setup.authority.createInvitationArtifactForOwnerCredential(owner.credential, 900_000,
+        index === 3 ? replayOrigin : index === 10 ? recoveryOrigin : origin,
         setup.bootstrap.caFingerprint, `fleet-${index}`));
     }
     setup.close();
@@ -266,6 +289,20 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       expect(seat.agent.turns.length, `assertion 8: Codex seat ${seat.label} must receive at least one turn`).toBeGreaterThan(0);
       expect(seat.agent.turns.every((turn: any) => turn.threadId === 'user'), `assertion 8: Codex seat ${seat.label} targeted threads ${seat.agent.turns.map((turn: any) => turn.threadId).join(', ')}, expected only the user thread`).toBe(true);
     }
+    const recoveryHome = join(temporary, 'attachment-recovery');
+    const recoveryWorktree = join(recoveryHome, 'repositories');
+    await mkdir(join(recoveryHome, 'tmp'), { recursive: true });
+    const recoveryEnv = { ...process.env, HOME: recoveryHome, BORG_STATE_ROOT: recoveryHome,
+      XDG_CONFIG_HOME: join(recoveryHome, '.config'), TMPDIR: join(recoveryHome, 'tmp') };
+    const recoveryInput = { clientRoot: root, origin: recoveryOrigin, name: 'attachment-recovery', worktree: recoveryWorktree,
+      cubeId: cube.cube_id, roleId: cube.default_worker_role_id };
+    const recoveryEnrollment = JSON.parse(await run([join(root, 'test/support/provision-wake-seat.mjs')], recoveryEnv,
+      { ...recoveryInput, mode: 'enroll', invitation: invitations[10] }));
+    await run([serverEntry, 'client-grant', recoveryEnrollment.clientId, cube.cube_id, 'write'], serverEnv);
+    const recovery = JSON.parse(await run([join(root, 'test/fixtures/attachment-recovery-journey.mjs')], recoveryEnv, recoveryInput));
+    expect(recovery.attachmentRecovery.map((row: any) => row.scenario)).toEqual(['reuse', 'unreserved-sibling', 'missing', 'replaced', 'reserved-target-absent']);
+    expect(recovery.attachmentRecovery.every((row: any) => row.recovered)).toBe(true);
+    console.log(JSON.stringify(recovery));
     if (process.env.OPENCODE_TEST_V2_BINARY) {
       // Extend the existing real-server fleet gate: replace one V1 endpoint
       // with the published native V2 host and its actual Borg MCP child.
@@ -293,6 +330,56 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       }
       for (const row of observations) console.log(JSON.stringify(row));
     }
+    const journeyFixture = join(root, 'test/fixtures/attachment-recovery-journey.mjs');
+    const crash = JSON.parse(await run([journeyFixture], recoveryEnv, { ...recoveryInput, mode: 'crash-prepare' }));
+    await run([journeyFixture], recoveryEnv, { ...recoveryInput, mode: 'crash-lock' }, 23);
+    const beforeRefusalConnections = recoveryConnectionCount;
+    const refusal = JSON.parse(await run([journeyFixture], recoveryEnv, { ...recoveryInput, ...crash, mode: 'crash-refusal' }));
+    expect(refusal.crashRefused).toBe(true);
+    expect(recoveryConnectionCount, 'Stale-lock refusal must not connect to the authority').toBe(beforeRefusalConnections);
+
+    // Preserve the machine-wide stale-lock policy: stop every owned Borg process,
+    // not merely this client's state-root processes, before explicit remediation.
+    for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+    for (const child of children.slice().reverse()) await stop(child);
+    const processListing = await new Promise<string>((resolve, reject) => {
+      const child = spawn('ps', ['-eo', 'pid=,args='], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = '';
+      child.stdout.on('data', chunk => { output += chunk; });
+      child.on('error', reject);
+      child.on('close', code => code === 0 ? resolve(output) : reject(new Error('Could not enumerate CI processes before lock remediation')));
+    });
+    const borgEntrypoints: string[] = [];
+    for (const packageRoot of [root, serverRoot]) {
+      const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
+      for (const [name, entry] of Object.entries(manifest.bin as Record<string, string>)) {
+        borgEntrypoints.push(name, entry.replace(/^\.\//, ''));
+      }
+    }
+    const entryPatterns = borgEntrypoints.map(entry =>
+      new RegExp(`(?:^|[/\\s])${entry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`));
+    const borgProcesses = processListing.split('\n').filter(line => entryPatterns.some(pattern => pattern.test(line)));
+    expect(borgProcesses, 'All Borg CLI/MCP/monitor/authority entrypoint processes must be absent before manual lock deletion').toEqual([]);
+    const expectedLock = join(recoveryHome, '.config/borgmcp/seats.json.lock');
+    expect(refusal.lockPath).toBe(expectedLock);
+    await rm(expectedLock); // Explicit disposable harness remediation, never product auto-reclaim.
+
+    // Reopen only the isolated authority on its identical DB, CA, parent and port.
+    const restarted = spawn(process.execPath, [serverEntry, 'start', '--host', '127.0.0.1', '--port', String(port)],
+      { env: serverEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    children.push(restarted);
+    restarted.stdout!.on('data', () => {}); restarted.stderr!.on('data', () => {});
+    recoveryProxy.listen(recoveryPort, '127.0.0.1'); await once(recoveryProxy, 'listening');
+    cleanups.push(closeRecoveryProxy);
+    await until(async () => {
+      if (restarted.exitCode !== null) throw new Error('Isolated authority restart failed');
+      try { await api('/healthz'); return true; } catch { return false; }
+    }, 'same isolated authority after explicit lock remediation');
+    expect(await readFile(join(data, 'ca.crt'))).toEqual(ca);
+    const recovered = JSON.parse(await run([journeyFixture], recoveryEnv, { ...recoveryInput, ...crash, mode: 'crash-retry' }));
+    expect(recovered).toEqual({ crashRecovered: true, droneId: crash.droneId, sessionId: crash.sessionId });
+    console.log(JSON.stringify({ attachmentCrashRecovery: { staleRefusal: true, machineBorgProcesses: 0,
+      sameAuthority: true, sameCommand: true, ...recovered } }));
   } finally {
     for (const cleanup of cleanups.reverse()) await cleanup();
     for (const child of children.reverse()) await stop(child);

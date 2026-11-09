@@ -55,6 +55,7 @@ import {
 import { parseLaunchAllArgs } from './parse-launch-all-args.js';
 import { unknownSubcommand } from './unknown-subcommand.js';
 import { parseRecoverEnrollmentArgs, runRecoverEnrollment } from './recover-enrollment-cmd.js';
+import { parseRecoverAttachmentArgs, runRecoverAttachment, buildDefaultRecoverAttachmentDeps } from './recover-attachment-cmd.js';
 import { runLaunchAll } from './launch-all-cmd.js';
 import { buildDefaultLaunchAllDeps } from './launch-all-deps.js';
 import {
@@ -359,6 +360,15 @@ async function main() {
       stdout: (line) => process.stdout.write(line),
     });
     process.exit(code);
+  }
+  if (process.argv[2] === 'recover-attachment') {
+    if (process.argv.includes('--help')) {
+      process.stdout.write(clientSubcommandHelpText('recover-attachment', [], getPackageVersion()) ?? '');
+      process.exit(0);
+    }
+    const parsed = parseRecoverAttachmentArgs(process.argv.slice(3));
+    if (!parsed.ok) { process.stderr.write(`${parsed.error}\n`); process.exit(1); }
+    process.exit(await runRecoverAttachment(parsed.flags, buildDefaultRecoverAttachmentDeps()));
   }
   if (process.argv[2] === 'spawn') {
     // Deprecated; the stub prints a redirect message and exits 2.

@@ -624,7 +624,8 @@ export type FinalizeServerSeatOutcome =
   | { committed: false; reason: 'expectation-mismatch' }
   // The merged activate+bind did not commit (missing/replaced/threw). The PENDING
   // record is the rerunnable locator; the caller must PRESERVE the worktree (CR #5).
-  | { committed: false; reason: 'activation-failed' };
+  | { committed: false; reason: 'activation-failed' }
+  | { committed: false; reason: 'ack-pending'; refusal?: import('borgmcp-shared').ErrorCode };
 
 /**
  * Metadata-only refresh (cube name / drone label / role display) of the CURRENT

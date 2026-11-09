@@ -1,4 +1,4 @@
-import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, REPOSITORY_CUBE_ASSOCIATION_PATH, REPOSITORY_CUBE_RESOLVE_PATH, createAttachRequestEnvelope, createProtocolEnvelope, encodeInvitationArtifact, decodeAssociateRepositoryCubeRequest, decodeAssociateRepositoryCubeResponseEnvelope, decodeAttachResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, decodeResolveRepositoryCubeRequest, decodeResolveRepositoryCubeResponseEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';
+import { ATTACH_PATH, ATTACH_RECONCILE_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, REPOSITORY_CUBE_ASSOCIATION_PATH, REPOSITORY_CUBE_RESOLVE_PATH, createAttachRequestEnvelope, createProtocolEnvelope, encodeInvitationArtifact, decodeAssociateRepositoryCubeRequest, decodeAssociateRepositoryCubeResponseEnvelope, decodeAttachResponseEnvelope, decodeReconcileAttachmentRequest, decodeReconcileAttachmentResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, decodeResolveRepositoryCubeRequest, decodeResolveRepositoryCubeResponseEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';
 import { createHash, randomUUID } from 'node:crypto';
 import { withEnrollmentOriginLock } from './enrollment-lock.js';
 import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, hasServerCredentialForOrigin, getPendingServerEnrollment, findPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, createPendingServerEnrollmentWithReplacementConsent, } from './config.js';
@@ -14,6 +14,58 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export const DEFAULT_LOCAL_SERVER_ORIGIN = 'https://127.0.0.1:7091';
 function handshakeUrl(origin, path) {
     return new URL(path, `${origin}/`).toString();
+}
+/** Parent-authenticated operation reconciliation. The receipt never authenticates. */
+export class AttachmentReconciliationError extends Error {
+    code;
+    constructor(code) {
+        super(`Attachment reconciliation was refused (${code})`);
+        this.code = code;
+        this.name = 'AttachmentReconciliationError';
+    }
+}
+export async function reconcileBorgServerAttachment(origin, parentCredential, request, fetchImpl) {
+    const payload = decodeReconcileAttachmentRequest(request);
+    const signal = AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS);
+    let response;
+    try {
+        response = await fetchImpl(handshakeUrl(origin, ATTACH_RECONCILE_PATH), {
+            method: 'POST', redirect: 'error', signal,
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${parentCredential}` },
+            body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
+        });
+    }
+    catch {
+        throw new Error('Attachment reconciliation could not be confirmed');
+    }
+    const body = await readBoundedResponseBody(response, HANDSHAKE_BODY_LIMIT, 'Attachment reconciliation response exceeded its limit', signal);
+    let decoded;
+    try {
+        decoded = JSON.parse(body);
+    }
+    catch {
+        throw new Error('Invalid attachment reconciliation response');
+    }
+    if (!response.ok) {
+        let code;
+        try {
+            code = decodeProtocolErrorEnvelope(decoded).error.code;
+        }
+        catch {
+            throw new Error('Attachment reconciliation was refused');
+        }
+        throw new AttachmentReconciliationError(code);
+    }
+    return decodeReconcileAttachmentResponseEnvelope(decoded, request.action).payload;
+}
+export async function acknowledgeBorgServerAttachment(attempt, parentCredential, fetchImpl) {
+    const result = await reconcileBorgServerAttachment(attempt.origin, parentCredential, {
+        receipt: attempt.receipt, cube_id: attempt.cubeId, role_id: attempt.roleId, action: 'finalize',
+        ...(attempt.priorDroneId === undefined ? {} : { prior_drone_id: attempt.priorDroneId }),
+    }, fetchImpl);
+    if (result.disposition !== 'finalized' || result.drone_id !== attempt.droneId || result.session_id !== attempt.sessionId) {
+        throw new Error('Attachment finalization identity did not match the local connection');
+    }
 }
 /** Bodyless, non-identifying liveness probe from the shared contract. */
 export async function probeBorgServer(origin, fetchImpl = fetch, timeoutMs = 750) {
@@ -219,6 +271,7 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
                 ...(binding.roleName !== undefined ? { roleName: binding.roleName } : {}),
                 ...(binding.roleClass !== undefined ? { roleClass: binding.roleClass } : {}),
                 ...(binding.isHumanSeat !== undefined ? { isHumanSeat: binding.isHumanSeat } : {}),
+                acknowledge: deps.acknowledge ?? ((attempt) => acknowledgeBorgServerAttachment(attempt, parentCredential, deps.fetchImpl ?? fetch)),
             }),
             // Abort-scrub of ONLY this own pending record (never an ACTIVE record, never
             // a same-ref replacement) — invoked when the server did not honor the

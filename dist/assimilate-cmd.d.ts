@@ -62,12 +62,14 @@ export interface AssimilateResult {
     role_id: string;
     local_session?: {
         credential_ref: string;
+        attachment_attempt?: string;
     };
     result?: 'created' | 'reused';
     finalize?: {
         activate: (binding: SeatBinding) => Promise<unknown>;
         scrubPending: () => Promise<unknown>;
         bindPending?: (binding: SeatBinding) => Promise<unknown>;
+        reserveTarget?: (target: string) => Promise<void>;
     };
     prepareAborted?: boolean;
 }
@@ -227,6 +229,7 @@ export interface AssimilateDeps {
         session_operation?: ServerSessionOperation;
         session_expected?: ExpectedBinding;
         revalidate_at_prepare?: boolean;
+        session_target_worktree?: string;
     }, serverTrustIdentity?: string) => Promise<AssimilateResult>;
     getInboxPath: (cubeId: string, droneId: string) => string;
     probeMcpReady: () => Promise<boolean>;
@@ -299,6 +302,7 @@ export interface CubeRoleResolutionOutcome {
 export declare function resolveAssimilationCubeRole(input: CubeRoleResolutionInput, deps: CubeRoleResolutionDeps): Promise<AssimilationPhaseOutcome<CubeRoleResolutionOutcome>>;
 export type SeatPreparationDeps = Pick<AssimilateDeps, 'assimilate' | 'getHostname' | 'stderr'>;
 export interface SeatPreparationInput {
+    targetWorktree?: string;
     apiUrl: string;
     token: string;
     serverTrustIdentity: string;
@@ -323,6 +327,7 @@ export interface SeatPreparationOutcome {
 export declare function prepareAssimilationSeat(input: SeatPreparationInput, deps: SeatPreparationDeps): Promise<AssimilationPhaseOutcome<SeatPreparationOutcome>>;
 export type WorktreePreparationDeps = Pick<AssimilateDeps, 'chdir' | 'cwd' | 'homedir' | 'mkdirp' | 'pathExists' | 'runSync' | 'stderr'>;
 export interface WorktreePreparationInput {
+    reserveTarget?: (target: string) => Promise<void>;
     flags: AssimilateFlags;
     repositoryContext: GitRepositoryContext;
     projectRoot: string;

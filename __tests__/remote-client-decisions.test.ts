@@ -38,7 +38,7 @@ function decisionFixture(overrides: Partial<Decision> = {}): Decision {
 }
 
 function localEnvelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '14', request_id: requestId, payload };
+  return { protocol_version: '15', request_id: requestId, payload };
 }
 
 describe('decision registry request shapes (local path)', () => {

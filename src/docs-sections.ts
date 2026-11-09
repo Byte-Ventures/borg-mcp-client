@@ -82,8 +82,8 @@ export const DOCS_SECTIONS: DocsSection[] = [
     slug: "seat-lifecycle",
     title: "Seat lifecycle and recovery",
     url: SEAT_LIFECYCLE_URL,
-    summary: "Saved-seat states, re-attach and reset recovery, duplicate-session guards, and deterministic multi-seat selection.",
-    keywords: ["seat", "lifecycle", "reattach", "re-attach", "reset-local-connection", "evicted", "revoked", "superseded", "inbox monitor", "multiple seats", "silent deafness"],
+    summary: "An attachment connects a drone session to a worktree. Recover a failed attachment with recover-attachment; inspect saved-seat states, re-attach/reset guards, and multi-seat selection.",
+    keywords: ["seat", "lifecycle", "reattach", "re-attach", "reset-local-connection", "recover-attachment", "failed attachment", "evicted", "revoked", "superseded", "inbox monitor", "multiple seats", "silent deafness"],
   },
   {
     slug: "self-hosting",

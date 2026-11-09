@@ -379,6 +379,10 @@ export async function finalizeAssimilationSeat(input, deps) {
         });
     }
     catch (error) {
+        if (result.local_session?.attachment_attempt !== undefined) {
+            deps.stderr(`Finalization could not be confirmed. The worktree was preserved. Run: borg recover-attachment --host ${shellEscape(apiUrl)} --attempt ${result.local_session.attachment_attempt}\n`);
+            return { kind: 'stop', code: 1 };
+        }
         const message = error instanceof Error ? error.message : String(error);
         deps.stderr(`finalizeServerSeat failed: ${message}\n`);
         rollbackWorktree();
@@ -386,6 +390,19 @@ export async function finalizeAssimilationSeat(input, deps) {
     }
     if (outcome.committed)
         return continueAssimilation(undefined);
+    if (result.local_session?.attachment_attempt !== undefined) {
+        const command = `borg recover-attachment --host ${shellEscape(apiUrl)} --attempt ${result.local_session.attachment_attempt}`;
+        if (outcome.reason === 'ack-pending' && outcome.refusal !== undefined) {
+            deps.stderr(`Attachment finalization was refused (${outcome.refusal}); the local connection and worktree were preserved. Run: ${command}\n`);
+            return { kind: 'stop', code: 1 };
+        }
+        deps.stderr(`The worktree was preserved, but attachment finalization could not be confirmed. Run: ${command}\n`);
+        return { kind: 'stop', code: 1 };
+    }
+    if (outcome.reason === 'ack-pending') {
+        deps.stderr('The local connection and worktree were preserved, but finalization could not be confirmed.\n');
+        return { kind: 'stop', code: 1 };
+    }
     if (outcome.reason === 'activation-failed') {
         let bindOutcome = 'unavailable';
         if (result.finalize.bindPending) {
@@ -646,6 +663,7 @@ export async function prepareAssimilationSeat(input, deps) {
             ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
             ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
             session_operation: sessionOperation,
+            ...(input.targetWorktree === undefined ? {} : { session_target_worktree: input.targetWorktree }),
             session_expected: sessionExpected,
             revalidate_at_prepare: true,
         }, serverTrustIdentity);
@@ -748,6 +766,13 @@ export async function prepareAssimilationWorktree(input, deps) {
     let worktreeResult;
     let residualBranch = null;
     while (true) {
+        try {
+            await input.reserveTarget?.(candidate);
+        }
+        catch {
+            deps.stderr('The attachment target could not be reserved; no worktree was created. Use the printed attachment recovery command.\n');
+            return { kind: 'stop', code: 1 };
+        }
         deps.mkdirp(dirname(candidate));
         const branchExisted = localBranchExists(deps.runSync, projectRoot, worktreeBranch);
         worktreeResult = branchExisted
@@ -1412,6 +1437,7 @@ async function runAssimilationFlow(args, deps, options, validateConnectionRole, 
     const cli = 'cli' in cubeRole.value ? cubeRole.value.cli : undefined;
     const effectiveModel = 'effectiveModel' in cubeRole.value ? cubeRole.value.effectiveModel : null;
     const seat = await prepareAssimilationSeat({
+        targetWorktree: wantSibling ? undefined : projectRoot,
         apiUrl: auth.apiUrl,
         token: auth.token,
         serverTrustIdentity: auth.serverTrustIdentity,
@@ -1433,6 +1459,7 @@ async function runAssimilationFlow(args, deps, options, validateConnectionRole, 
     const { result, assignedRole, sessionExpected } = seat.value;
     validateConnectionRole?.(assignedRole);
     const worktree = await prepareAssimilationWorktree({
+        reserveTarget: result.finalize?.reserveTarget,
         flags: args.flags,
         repositoryContext,
         projectRoot,
@@ -1441,8 +1468,12 @@ async function runAssimilationFlow(args, deps, options, validateConnectionRole, 
         assignedRole,
         existing,
     }, deps);
-    if (worktree.kind === 'stop')
+    if (worktree.kind === 'stop') {
+        if (result.local_session?.attachment_attempt !== undefined) {
+            deps.stderr(`The attachment remains recoverable from this source worktree. Run: borg recover-attachment --host ${shellEscape(auth.apiUrl)} --attempt ${result.local_session.attachment_attempt}\n`);
+        }
         return worktree.code;
+    }
     const { spawnedWorktreePath } = worktree.value;
     // ----- Step 7b: provision launch access before persisting/launching -----
     // The launched process gets its current worktree plus a stable, disposable
@@ -1479,6 +1510,10 @@ async function runAssimilationFlow(args, deps, options, validateConnectionRole, 
     const rollbackWorktree = () => {
         if (!spawnedWorktreePath)
             return;
+        if (result.local_session?.attachment_attempt !== undefined) {
+            deps.stderr(`The accepted attachment's worktree was preserved. Run: borg recover-attachment --host ${shellEscape(auth.apiUrl)} --attempt ${result.local_session.attachment_attempt}\n`);
+            return;
+        }
         const rm = deps.runSync('git', ['worktree', 'remove', '--force', spawnedWorktreePath], projectRoot);
         if (rm.status === 0) {
             deps.stderr(`rolled back spawned worktree at ${spawnedWorktreePath}\n`);
@@ -1499,7 +1534,9 @@ async function runAssimilationFlow(args, deps, options, validateConnectionRole, 
         catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             deps.stderr(`Borg could not save the ${cli} preference for sibling worktree ${spawnedWorktreePath}: ${message}. ` +
-                'The worktree was removed; correct the local configuration and retry.\n');
+                (result.local_session?.attachment_attempt !== undefined
+                    ? 'Correct the local configuration, then use the printed attachment recovery command.\n'
+                    : 'The worktree was removed; correct the local configuration and retry.\n'));
             rollbackWorktree();
             return 1;
         }
