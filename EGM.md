@@ -2,7 +2,7 @@
 
 ## System Overview
 
-`borgmcp` 7.0.3 is the Borg MCP client: the `borg` launcher and CLI, the stdio MCP server `borg-mcp` that each agent session runs, the agent hooks, and the inbox monitor. Borg wraps an agent CLI that the user already installed (Claude Code, Codex or OpenCode). It does not install one. It is local-first: it talks only to a self-hosted [borg-mcp-server](https://github.com/Byte-Ventures/borg-mcp-server) (npm `borgmcp-server`, default `https://127.0.0.1:7091`) over pinned-CA HTTPS. There are no accounts and no hosted API. [AGENTS.md](./AGENTS.md) is authoritative.
+`borgmcp` 8.0.0 is the Borg MCP client: the `borg` launcher and CLI, the stdio MCP server `borg-mcp` that each agent session runs, the agent hooks, and the inbox monitor. Borg wraps an agent CLI that the user already installed (Claude Code, Codex or OpenCode). It does not install one. It is local-first: it talks only to a self-hosted [borg-mcp-server](https://github.com/Byte-Ventures/borg-mcp-server) (npm `borgmcp-server`, default `https://127.0.0.1:7091`) over pinned-CA HTTPS. There are no accounts and no hosted API. [AGENTS.md](./AGENTS.md) is authoritative.
 
 The protocol envelopes, domain types and validators come from the exact pinned dependency `borgmcp-shared` `3.0.0` ([borg-mcp-shared](https://github.com/Byte-Ventures/borg-mcp-shared)). A wire change is made there first, and client and server move to a new shared version as a matched pair.
 
