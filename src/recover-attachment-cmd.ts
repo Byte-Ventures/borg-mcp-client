@@ -5,7 +5,7 @@ import { loadBorgServerTrust } from './server-trust.js';
 import { resolveGitRepositoryContext } from './repository-identity.js';
 import { readAttachmentAttempt, recoverAttachmentAttempt, reserveAttachmentTarget,
   observeSeat, isAttachmentAttempt, AttachmentAttemptUnavailableError, type AttachmentAttempt, type SeatRecord } from './seats.js';
-import { reconcileBorgServerAttachment, sendBorgServerAttach, AttachmentReconciliationError } from './server-handshake.js';
+import { reconcileBorgServerAttachment, sendBorgServerAttach, preflightBorgServerTag, AttachmentReconciliationError } from './server-handshake.js';
 import { ErrorCode, type ReconcileAttachmentAction, type ReconcileAttachmentResponse } from 'borgmcp-shared';
 import { shellEscape } from './shell-escape.js';
 import { advanceLocalServerCursor } from './local-server-cursor.js';
@@ -116,11 +116,15 @@ async function defaultContext(origin: string): Promise<RecoveryContext> {
   if (!current) throw new Error('A repository worktree is required');
   return {
     origin, trustIdentity: trust.identity, clientId: parent.clientId, worktree: current.root,
-    reconcile: (entry, action) => reconcileBorgServerAttachment(origin, parent.credential, {
-      receipt: entry.receipt, cube_id: entry.cubeId, role_id: entry.roleId, action,
-      ...(entry.priorDroneId === undefined ? {} : { prior_drone_id: entry.priorDroneId }),
-    }, trust.fetchImpl),
+    reconcile: async (entry, action) => {
+      await preflightBorgServerTag(origin, trust.fetchImpl);
+      return reconcileBorgServerAttachment(origin, parent.credential, {
+        receipt: entry.receipt, cube_id: entry.cubeId, role_id: entry.roleId, action,
+        ...(entry.priorDroneId === undefined ? {} : { prior_drone_id: entry.priorDroneId }),
+      }, trust.fetchImpl);
+    },
     resume: async (entry, record) => {
+      await preflightBorgServerTag(origin, trust.fetchImpl);
       const prepared = await sendBorgServerAttach(origin, trust.identity, parent.credential, {
         cubeId: entry.cubeId, roleId: entry.roleId, operation: entry.operation,
         ...(entry.priorDroneId === undefined ? {} : { priorDroneId: entry.priorDroneId }),
