@@ -4,7 +4,7 @@
 
 - Use Node.js 22.13+ (the first release with unflagged `node:sqlite`, which the representative state uses). `build`, `check`, `dev`, `test:unit` and `test:release` run `scripts/node-preflight.mjs` first and fail fast on an older runtime; `clean`, `start`, `onboarding:smoke` and the `verify:*` scripts invoke node directly and do not.
 - Install with `npm ci`.
-- **`dist/` is generated output and it is TRACKED IN GIT** — 464 files, listed in `files`, with no `.gitignore` rule. Never hand-edit it: run `npm run build` and commit the result. `publish.yml` rebuilds it and then runs `git diff --exit-code -- dist`, so committed output that does not match a fresh build fails the release.
+- **`dist/` is generated output and it is TRACKED IN GIT** — every generated file is committed, listed in `files`, with no `.gitignore` rule. Never hand-edit it: run `npm run build` and commit the result. `publish.yml` rebuilds it and then runs `git diff --exit-code -- dist`, so committed output that does not match a fresh build fails the release.
 - Run one test file with `npx vitest run test/<name>.test.ts`, or one named test with `-t '<test name>'`.
 - `npm test` is two suites: `test:unit` (Vitest) and `test:release` (`node --test test/release-lane.test.mjs`). Both must pass before merge; CI runs unit tests on the Node floor/current and release policy once.
 - `npm run check` is typecheck only. It does not run tests, and it passes on a tree whose tests fail.
@@ -20,6 +20,12 @@
 - `src/docs-sections.ts` is the section index `borg_docs` serves to agents. It is a third documentation surface; a concept added to the README and the help text is still missing here.
 - `src/config.ts`, `src/cubes.ts`, `src/credential-paths.ts` own on-disk state under the user's config root. Treat every path there as the operator's data.
 - Protocol envelopes, domain types, and conformance vectors live in the separately released `borgmcp-shared` dependency. Change that contract there first, then consume an exact published version here.
+
+## Code Contracts (EGM.md)
+
+- Each code directory has an `EGM.md` contract that states its interface, invariants, side effects, and verification command. Start at the root [`EGM.md`](EGM.md).
+- Contracts for `src/` live under `egm/src/`, not in `src/`. `src/` is packed to npm, and `scripts/verify-packed-artifact.mjs` rejects any non-`.ts` file there.
+- When a change alters a documented interface, invariant, or side effect, update the matching contract in the same PR. Contracts are orientation summaries; the code is authoritative.
 
 ## Invariants
 
