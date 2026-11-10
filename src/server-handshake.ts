@@ -1,5 +1,6 @@
 import {
   ATTACH_PATH,
+  ATTACH_RECONCILE_PATH,
   CUBES_PATH,
   ENROLLMENT_EXCHANGE_PATH,
   HEALTH_PATH,
@@ -12,6 +13,10 @@ import {
   decodeAssociateRepositoryCubeRequest,
   decodeAssociateRepositoryCubeResponseEnvelope,
   decodeAttachResponseEnvelope,
+  decodeReconcileAttachmentRequest,
+  decodeReconcileAttachmentResponseEnvelope,
+  type ReconcileAttachmentRequest,
+  type ReconcileAttachmentResponse,
   decodeCreateCubeRequest,
   decodeCreateCubeResponseEnvelope,
   decodeEnrollmentExchangeRequest,
@@ -57,6 +62,7 @@ import {
   type BindPendingSeatOutcome,
   type SeatBinding,
   type SeatOperation as ServerSessionOperation,
+  type AttachmentAttempt,
 } from './seats.js';
 import {
   BorgServerError,
@@ -95,6 +101,52 @@ type FetchLike = typeof fetch;
 
 function handshakeUrl(origin: string, path: string): string {
   return new URL(path, `${origin}/`).toString();
+}
+
+/** Parent-authenticated operation reconciliation. The receipt never authenticates. */
+export class AttachmentReconciliationError extends Error {
+  constructor(readonly code: ErrorCode) {
+    super(`Attachment reconciliation was refused (${code})`);
+    this.name = 'AttachmentReconciliationError';
+  }
+}
+
+export async function reconcileBorgServerAttachment(
+  origin: string, parentCredential: string, request: ReconcileAttachmentRequest,
+  fetchImpl: FetchLike,
+): Promise<ReconcileAttachmentResponse> {
+  const payload = decodeReconcileAttachmentRequest(request);
+  const signal = AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetchImpl(handshakeUrl(origin, ATTACH_RECONCILE_PATH), {
+      method: 'POST', redirect: 'error', signal,
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${parentCredential}` },
+      body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
+    });
+  } catch { throw new Error('Attachment reconciliation could not be confirmed'); }
+  const body = await readBoundedResponseBody(response, HANDSHAKE_BODY_LIMIT, 'Attachment reconciliation response exceeded its limit', signal);
+  let decoded: unknown;
+  try { decoded = JSON.parse(body); } catch { throw new Error('Invalid attachment reconciliation response'); }
+  if (!response.ok) {
+    let code: ErrorCode;
+    try { code = decodeProtocolErrorEnvelope(decoded).error.code; }
+    catch { throw new Error('Attachment reconciliation was refused'); }
+    throw new AttachmentReconciliationError(code);
+  }
+  return decodeReconcileAttachmentResponseEnvelope(decoded, request.action).payload;
+}
+
+export async function acknowledgeBorgServerAttachment(
+  attempt: AttachmentAttempt, parentCredential: string, fetchImpl: FetchLike,
+): Promise<void> {
+  const result = await reconcileBorgServerAttachment(attempt.origin, parentCredential, {
+    receipt: attempt.receipt, cube_id: attempt.cubeId, role_id: attempt.roleId, action: 'finalize',
+    ...(attempt.priorDroneId === undefined ? {} : { prior_drone_id: attempt.priorDroneId }),
+  }, fetchImpl);
+  if (result.disposition !== 'finalized' || result.drone_id !== attempt.droneId || result.session_id !== attempt.sessionId) {
+    throw new Error('Attachment finalization identity did not match the local connection');
+  }
 }
 
 /** Bodyless, non-identifying liveness probe from the shared contract. */
@@ -214,7 +266,7 @@ export interface ServerAttachResult {
 }
 
 /**
- * Attach an enrolled client principal to one granted cube/role over protocol v14.
+ * Attach an enrolled client principal to one granted cube/role over protocol v15.
  * The client CSPRNG-generates the session bearer and persists it PENDING in the
  * local 0600 credential store (keyed by the stable per-seat identity) BEFORE
  * this request, so an interrupted/lost response is recovered by re-sending the
@@ -280,6 +332,7 @@ export async function sendBorgServerAttach(
     bindPending?: typeof bindPendingSeatToWorktree;
     scrubPending?: typeof scrubPendingSeat;
     sessionCredentialRef?: typeof seatRef;
+    acknowledge?: (attempt: AttachmentAttempt) => Promise<void>;
   } = {},
 ): Promise<PreparedServerAttach> {
   if (!UUID_RE.test(request.cubeId) || !UUID_RE.test(request.roleId)) {
@@ -416,6 +469,7 @@ export async function sendBorgServerAttach(
           ...(binding.roleName !== undefined ? { roleName: binding.roleName } : {}),
           ...(binding.roleClass !== undefined ? { roleClass: binding.roleClass } : {}),
           ...(binding.isHumanSeat !== undefined ? { isHumanSeat: binding.isHumanSeat } : {}),
+          acknowledge: deps.acknowledge ?? ((attempt) => acknowledgeBorgServerAttachment(attempt, parentCredential, deps.fetchImpl ?? fetch)),
         }),
       // Abort-scrub of ONLY this own pending record (never an ACTIVE record, never
       // a same-ref replacement) — invoked when the server did not honor the

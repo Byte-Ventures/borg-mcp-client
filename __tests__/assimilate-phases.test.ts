@@ -81,6 +81,7 @@ describe('assimilation phases', () => {
       cli: 'claude',
       effectiveModel: null,
       projectRoot: '/work/repo',
+      targetWorktree: '/work/repo',
       existing: null,
       reattachPriorId: undefined,
       remintInvalidPrior: false,
@@ -95,6 +96,7 @@ describe('assimilation phases', () => {
     expect(assimilate.mock.calls[0]![2]).toMatchObject({
       session_expected: { kind: 'absent' },
       revalidate_at_prepare: true,
+      session_target_worktree: '/work/repo',
     });
   });
 

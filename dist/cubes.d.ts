@@ -195,6 +195,10 @@ export type FinalizeServerSeatOutcome = {
 } | {
     committed: false;
     reason: 'activation-failed';
+} | {
+    committed: false;
+    reason: 'ack-pending';
+    refusal?: import('borgmcp-shared').ErrorCode;
 };
 /**
  * Metadata-only refresh (cube name / drone label / role display) of the CURRENT

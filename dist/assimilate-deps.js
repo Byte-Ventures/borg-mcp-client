@@ -20,16 +20,17 @@ import { buildRuntimeMetadataReport } from './runtime-metadata.js';
 import { inspectLiveInboxMonitor } from './seat-reattach-guard.js';
 import { buildDefaultFirstRunServerInstallDeps, offerFirstRunServerInstall, } from './first-run-server.js';
 import { listCubes as remoteListCubes, getCube as remoteGetCube, } from './remote-client.js';
-import { DEFAULT_LOCAL_SERVER_ORIGIN, associateLocalBorgServerRepositoryCube, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, enrollLocalBorgServerArtifact, probeLocalBorgServer, resolveLocalBorgServerRepositoryCube, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
+import { DEFAULT_LOCAL_SERVER_ORIGIN, associateLocalBorgServerRepositoryCube, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, enrollLocalBorgServerArtifact, probeLocalBorgServer, resolveLocalBorgServerRepositoryCube, resumeLocalBorgServerEnrollment, sendBorgServerAttach, AttachmentReconciliationError, } from './server-handshake.js';
 import { advanceLocalServerCursor } from './local-server-cursor.js';
-import { findIncompleteSiblingAttempt, hasActiveSeatInDifferentCloneFamily, observeSeat, prepareSeat, seatRef, } from './seats.js';
+import { shellEscape } from './shell-escape.js';
+import { findIncompleteSiblingAttempt, hasActiveSeatInDifferentCloneFamily, observeSeat, prepareSeat, reserveAttachmentTarget, seatRef, } from './seats.js';
 import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError, CubeCreationConfirmationError } from './server-errors.js';
 import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, inboxPathForDrone, setProjectCliPreference, } from './cubes.js';
 import { addProjectSessionStartHook, provisionLaunchAccess, } from './config-utils.js';
-import { findPendingServerEnrollment, listServerCredentialOrigins } from './config.js';
+import { findPendingServerEnrollment, listServerCredentialOrigins, getServerCredentialRecord } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote.js';
@@ -182,12 +183,17 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
             try {
                 outcome = (await activate(binding));
             }
-            catch {
+            catch (error) {
+                if (error instanceof AttachmentReconciliationError) {
+                    return { committed: false, reason: 'ack-pending', refusal: error.code };
+                }
                 return { committed: false, reason: 'activation-failed' };
             }
             return outcome === 'activated'
                 ? { committed: true }
-                : { committed: false, reason: 'activation-failed' };
+                : outcome === 'ack-pending' || outcome === 'indeterminate'
+                    ? { committed: false, reason: 'ack-pending' }
+                    : { committed: false, reason: 'activation-failed' };
         },
         hasActiveSeatInDifferentCloneFamily,
         findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
@@ -358,11 +364,20 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
                     operation,
                     credential: randomBytes(32).toString('base64url'),
                 };
+                const parent = await getServerCredentialRecord(apiUrl, serverTrustIdentity);
+                if (!parent?.clientId || parent.credential !== token) {
+                    throw new Error('Selected Borg server enrollment changed; no attachment was sent');
+                }
                 const preparedMint = await prepareSeat({
                     expected: params.session_expected ?? { kind: 'absent' },
                     revalidate: params.revalidate_at_prepare === true && params.session_expected !== undefined,
                     scrubBeforeMint: params.remint_invalid_prior === true,
                     seed,
+                    attachment: { clientId: parent.clientId,
+                        ...(params.prior_drone_id === undefined ? {} : { priorDroneId: params.prior_drone_id }),
+                        ...((params.session_target_worktree ?? (operation.kind === 'seat' ? operation.projectRoot : undefined)) === undefined ? {} :
+                            { targetWorktree: params.session_target_worktree ?? operation.projectRoot }),
+                    },
                 });
                 if (!preparedMint.ok) {
                     return {
@@ -377,19 +392,28 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
                 // Network only — the pending→ACTIVE flip + worktree BIND are merged into the
                 // single-store activate+bind op, deferred to the FINALIZE thunk so the
                 // binding lands ATOMICALLY WITH activation (ACTIVE-without-binding unreachable).
-                const prepared = await sendBorgServerAttach(apiUrl, serverTrustIdentity, token, {
-                    cubeId: params.cube_id,
-                    roleId: params.role_id,
-                    operation,
-                    ...(params.prior_drone_id === undefined
-                        ? {}
-                        : { priorDroneId: params.prior_drone_id }),
-                    runtimeMetadata: buildRuntimeMetadataReport({
-                        agentKind: params.agent_kind,
-                        reportedModel: params.model,
-                        workingRepo: params.working_repo,
-                    }),
-                }, pending.credential, { fetchImpl: trust.fetchImpl });
+                let prepared;
+                try {
+                    prepared = await sendBorgServerAttach(apiUrl, serverTrustIdentity, token, {
+                        cubeId: params.cube_id,
+                        roleId: params.role_id,
+                        operation,
+                        ...(params.prior_drone_id === undefined
+                            ? {}
+                            : { priorDroneId: params.prior_drone_id }),
+                        runtimeMetadata: buildRuntimeMetadataReport({
+                            agentKind: params.agent_kind,
+                            reportedModel: params.model,
+                            workingRepo: params.working_repo,
+                        }),
+                    }, pending.credential, { fetchImpl: trust.fetchImpl });
+                }
+                catch (error) {
+                    if (error instanceof Error && pending.attachmentAttempt !== undefined) {
+                        error.message += ` Run: borg recover-attachment --host ${shellEscape(apiUrl)} --attempt ${pending.attachmentAttempt}`;
+                    }
+                    throw error;
+                }
                 if (params.prior_drone_id) {
                     // The seat identity did not match the reattach/remint intent. Scrub the
                     // caller's own pending record (no-op unless it is still ours + pending)
@@ -423,6 +447,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
                     result: prepared.result,
                     local_session: {
                         credential_ref: prepared.credentialRef,
+                        attachment_attempt: pending.attachmentAttempt,
                     },
                     // Handles for the cube-lock-held FINALIZE (assimilate-cmd Step 8).
                     finalize: {
@@ -431,6 +456,8 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
                         // CR#2: bind the surviving PENDING record to the preserved worktree on an
                         // activation failure so the rerun-from-there resumes the exact operation.
                         bindPending: prepared.bindPending,
+                        reserveTarget: pending.attachmentAttempt === undefined ? undefined :
+                            (target, failedCollisionTarget) => reserveAttachmentTarget(pending.attachmentAttempt, target, failedCollisionTarget),
                     },
                 };
             }

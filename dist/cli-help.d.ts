@@ -24,6 +24,7 @@ export declare function setupNextStepsText(): string;
  * claude.ts, which launches agent CLIs as a side effect.
  */
 export declare function topLevelHelpText(version: string): string;
+export declare function recoverAttachmentHelpText(version: string): string;
 export declare function recoverEnrollmentHelpText(version: string): string;
 /** Help for the whole-product, npm-owned update journey. */
 export declare function updateHelpText(version: string): string;

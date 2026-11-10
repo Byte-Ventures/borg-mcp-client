@@ -1,10 +1,17 @@
-import { type InvitationArtifact, type AssociateRepositoryCubeResponse, type CreateCubeRepository, type CreateCubeResponse, type CubeTemplate, type DroneRuntimeMetadata, type ProtocolTagPreflight, type ResolveRepositoryCubeResponse, type ServerCapability } from 'borgmcp-shared/protocol';
+import { type ReconcileAttachmentRequest, type ReconcileAttachmentResponse, type InvitationArtifact, ErrorCode, type AssociateRepositoryCubeResponse, type CreateCubeRepository, type CreateCubeResponse, type CubeTemplate, type DroneRuntimeMetadata, type ProtocolTagPreflight, type ResolveRepositoryCubeResponse, type ServerCapability } from 'borgmcp-shared/protocol';
 import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, hasServerCredentialForOrigin, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, createPendingServerEnrollmentWithReplacementConsent, type PendingServerEnrollmentRecord } from './config.js';
-import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, type ActivateSeatOutcome, type BindPendingSeatOutcome, type SeatBinding, type SeatOperation as ServerSessionOperation } from './seats.js';
+import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, type ActivateSeatOutcome, type BindPendingSeatOutcome, type SeatBinding, type SeatOperation as ServerSessionOperation, type AttachmentAttempt } from './seats.js';
 import { loadBorgServerTrust, loadBorgServerTrustFromPresentedChain, loadStagedBorgServerTrust, type BorgServerTrust, type StagedBorgServerTrust } from './server-trust.js';
 import type { EnrollmentArtifactBinding } from './enrollment-types.js';
 export declare const DEFAULT_LOCAL_SERVER_ORIGIN: "https://127.0.0.1:7091";
 type FetchLike = typeof fetch;
+/** Parent-authenticated operation reconciliation. The receipt never authenticates. */
+export declare class AttachmentReconciliationError extends Error {
+    readonly code: ErrorCode;
+    constructor(code: ErrorCode);
+}
+export declare function reconcileBorgServerAttachment(origin: string, parentCredential: string, request: ReconcileAttachmentRequest, fetchImpl: FetchLike): Promise<ReconcileAttachmentResponse>;
+export declare function acknowledgeBorgServerAttachment(attempt: AttachmentAttempt, parentCredential: string, fetchImpl: FetchLike): Promise<void>;
 /** Bodyless, non-identifying liveness probe from the shared contract. */
 export declare function probeBorgServer(origin: string, fetchImpl?: FetchLike, timeoutMs?: number): Promise<boolean>;
 /**
@@ -56,7 +63,7 @@ export interface ServerAttachResult {
     } | null;
 }
 /**
- * Attach an enrolled client principal to one granted cube/role over protocol v14.
+ * Attach an enrolled client principal to one granted cube/role over protocol v15.
  * The client CSPRNG-generates the session bearer and persists it PENDING in the
  * local 0600 credential store (keyed by the stable per-seat identity) BEFORE
  * this request, so an interrupted/lost response is recovered by re-sending the
@@ -117,6 +124,7 @@ export declare function sendBorgServerAttach(origin: string, trustIdentity: stri
     bindPending?: typeof bindPendingSeatToWorktree;
     scrubPending?: typeof scrubPendingSeat;
     sessionCredentialRef?: typeof seatRef;
+    acknowledge?: (attempt: AttachmentAttempt) => Promise<void>;
 }): Promise<PreparedServerAttach>;
 /**
  * Redeem one invitation after the caller has verified TLS and derived the

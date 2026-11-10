@@ -13,15 +13,18 @@
  *
  * The single store flock (seat-store.withStore) serializes every read-compare-
  * write; there is no second lock and no composite. The raw bearer rests ONLY in
- * the 0600 file and is never returned past this module except by the sole
- * hydration reader; every other observation is digest-only.
+ * the 0600 file and is returned only to the attach sender or active hydration
+ * reader; identity observations are digest-only.
  */
 
 import path from 'path';
-import { createHash } from 'node:crypto';
+import { lstat } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
 import { readStoreFile, withStore } from './seat-store.js';
 import { LegacySessionCredentialCollisionError } from './server-errors.js';
 import { borgConfigRoot } from './private-root.js';
+import { shellEscape } from './shell-escape.js';
+import { deriveAttachmentReceipt, decodeAttachmentReceipt, ErrorCode, type ReconcileAttachmentAction, type ReconcileAttachmentResponse } from 'borgmcp-shared';
 
 export const SEATS_FILE = path.join(borgConfigRoot(), 'seats.json');
 const SEATS_VERSION = 1 as const;
@@ -45,6 +48,7 @@ export interface SeatRecord {
   // credential
   credential: string;
   state: 'pending' | 'active';
+  attachmentAttempt?: string;
   /** Monotonic store-local order assigned when this record is bound active. */
   bindingOrder?: number;
   // server metadata (active only)
@@ -64,6 +68,55 @@ export interface SeatRecord {
 interface SeatsFile {
   version: number;
   seats: Record<string, SeatRecord>;
+  attachments: Record<string, AttachmentAttempt>;
+}
+
+export interface AttachmentAttempt {
+  attempt: string;
+  receipt: string;
+  origin: string;
+  trustIdentity: string;
+  clientId: string;
+  cubeId: string;
+  roleId: string;
+  priorDroneId?: string;
+  credentialRef: string;
+  pendingDigest: string;
+  operation: SeatOperation;
+  targetWorktree?: string;
+  disposition: 'unresolved' | 'ack-pending' | 'finalized' | 'cleanup-only' | 'retired';
+  droneId?: string;
+  sessionId?: string;
+}
+
+export class AttachmentRecoveryRequiredError extends Error {
+  constructor(readonly attempt: string, origin: string) {
+    super(`An earlier attachment needs recovery before creating another connection. Run: borg recover-attachment --host ${shellEscape(origin)} --attempt ${attempt}`);
+    this.name = 'AttachmentRecoveryRequiredError';
+  }
+}
+
+export class AttachmentAttemptUnavailableError extends Error {
+  constructor() {
+    super('The requested attachment recovery attempt is not available from this worktree and authority.');
+    this.name = 'AttachmentAttemptUnavailableError';
+  }
+}
+
+function operationClass(operation: SeatOperation, targetWorktree?: string): string {
+  return operation.kind === 'seat' || targetWorktree === operation.projectRoot ? 'seat' : operation.operationKey.startsWith('implicit-sibling:')
+    ? 'implicit-sibling' : operation.operationKey;
+}
+
+export function isAttachmentAttempt(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+}
+
+function cleanupAttachment(store: SeatsFile, record: SeatRecord): void {
+  const entry = record.attachmentAttempt === undefined ? undefined : store.attachments[String(record.attachmentAttempt)];
+  if (entry && entry.pendingDigest === digestOf(record.credential) && entry.disposition !== 'retired') {
+    entry.disposition = 'cleanup-only';
+  }
 }
 
 /** The deterministic per-seat ref (identical algorithm to the retired keychain account). */
@@ -97,7 +150,7 @@ function digestOf(bearer: string): string {
 }
 
 function emptyStore(): SeatsFile {
-  return { version: SEATS_VERSION, seats: {} };
+  return { version: SEATS_VERSION, seats: {}, attachments: {} };
 }
 
 const ROLE_CLASSES = new Set(['queen', 'worker']);
@@ -146,6 +199,7 @@ function isValidSeatRecord(ref: string, value: unknown): value is SeatRecord {
     return false;
   }
   if (r.state !== 'pending' && r.state !== 'active') return false;
+  if (r.attachmentAttempt !== undefined && !isAttachmentAttempt(r.attachmentAttempt)) return false;
   if (r.bindingOrder !== undefined &&
       (typeof r.bindingOrder !== 'number' || !Number.isSafeInteger(r.bindingOrder) || r.bindingOrder < 1)) return false;
   // Optional display/typed fields, validated when present.
@@ -193,7 +247,7 @@ function parseStore(raw: string): SeatsFile | null {
     return null;
   }
   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    const candidate = parsed as { version?: unknown; seats?: unknown };
+    const candidate = parsed as { version?: unknown; seats?: unknown; attachments?: unknown };
     if (
       candidate.version === SEATS_VERSION &&
       candidate.seats &&
@@ -235,12 +289,183 @@ function parseStore(raw: string): SeatsFile | null {
         }
         if (!isValidSeatRecord(ref, record)) return null;
       }
-      const store = { version: SEATS_VERSION, seats: seats as Record<string, SeatRecord> };
+      const hasAttachments = Object.hasOwn(candidate, 'attachments');
+      const attachments = hasAttachments ? candidate.attachments : {};
+      if (typeof attachments !== 'object' || attachments === null || Array.isArray(attachments)) return null;
+      for (const [key, value] of Object.entries(attachments)) {
+        if (!isValidAttachmentAttempt(key, value)) return null;
+        const record = seats[value.credentialRef] as SeatRecord | undefined;
+        if (record && digestOf(record.credential) === value.pendingDigest && record.attachmentAttempt !== value.attempt) return null;
+      }
+      for (const record of Object.values(seats) as SeatRecord[]) {
+        if (record.attachmentAttempt !== undefined) {
+          const entry = (attachments as Record<string, AttachmentAttempt>)[String(record.attachmentAttempt)];
+          if (!entry || entry.credentialRef !== seatRef(record) || entry.pendingDigest !== digestOf(record.credential)) return null;
+          if (record.state === 'active' &&
+              (!['ack-pending', 'finalized'].includes(entry.disposition) || entry.droneId !== record.droneId ||
+               entry.sessionId !== record.sessionId || entry.targetWorktree !== record.worktree)) return null;
+          if (record.state === 'pending' && entry.disposition !== 'unresolved') return null;
+        }
+      }
+      const store: SeatsFile = { version: SEATS_VERSION, seats: seats as Record<string, SeatRecord>,
+        attachments: attachments as Record<string, AttachmentAttempt> };
       repairOrderedDuplicateBindings(store);
       return store;
     }
   }
   return null;
+}
+
+function isValidAttachmentAttempt(key: string, value: unknown): value is AttachmentAttempt {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entry = value as AttachmentAttempt;
+  try { decodeAttachmentReceipt(entry.receipt); } catch { return false; }
+  return isAttachmentAttempt(entry.attempt) && entry.attempt === key &&
+    /^[a-f0-9]{64}$/.test(entry.pendingDigest) &&
+    isNonEmptyString(entry.origin) && isNonEmptyString(entry.trustIdentity) &&
+    UUID_RE.test(entry.clientId) && UUID_RE.test(entry.cubeId) && UUID_RE.test(entry.roleId) &&
+    (entry.priorDroneId === undefined || UUID_RE.test(entry.priorDroneId)) &&
+    isValidOperation(entry.operation) && entry.credentialRef === seatRef(entry) &&
+    (entry.targetWorktree === undefined || isNonEmptyString(entry.targetWorktree)) &&
+    ['unresolved', 'ack-pending', 'finalized', 'cleanup-only', 'retired'].includes(entry.disposition) &&
+    (entry.droneId === undefined || UUID_RE.test(entry.droneId)) &&
+    (entry.sessionId === undefined || UUID_RE.test(entry.sessionId)) &&
+    (!['ack-pending', 'finalized'].includes(entry.disposition) || (entry.droneId !== undefined && entry.sessionId !== undefined));
+}
+
+export async function readAttachmentAttempt(input: {
+  attempt: string; origin: string; trustIdentity: string; clientId: string; worktree: string;
+}): Promise<AttachmentAttempt> {
+  const entry = (await readStore()).attachments[String(input.attempt)];
+  if (!entry || entry.origin !== input.origin || entry.trustIdentity !== input.trustIdentity ||
+      entry.clientId !== input.clientId ||
+      (entry.operation.projectRoot !== input.worktree && entry.targetWorktree !== input.worktree)) {
+    throw new AttachmentAttemptUnavailableError();
+  }
+  return entry;
+}
+
+export async function reserveAttachmentTarget(attempt: string, targetWorktree: string, failedCollisionTarget?: string): Promise<void> {
+  await withStore<SeatsFile, void>(SEATS_FILE, emptyStore, parseStore, async (txn) => {
+    const entry = txn.data.attachments[String(attempt)];
+    const record = entry && txn.data.seats[entry.credentialRef];
+    if (!entry || !record || record.attachmentAttempt !== attempt || record.state !== 'pending' ||
+        entry.pendingDigest !== digestOf(record.credential) || entry.disposition !== 'unresolved' ||
+        (failedCollisionTarget === undefined
+          ? entry.targetWorktree !== undefined && entry.targetWorktree !== targetWorktree
+          : entry.targetWorktree !== failedCollisionTarget || record.worktree !== undefined ||
+            !await absentAttachmentTarget(failedCollisionTarget) || !await absentAttachmentTarget(targetWorktree)) ||
+        Object.values(txn.data.attachments).some(other => other.attempt !== attempt && other.targetWorktree === targetWorktree &&
+          other.disposition !== 'finalized' && other.disposition !== 'retired') ||
+        Object.values(txn.data.seats).some(candidate => candidate !== record && candidate.worktree === targetWorktree)) {
+      throw new Error('Attachment target changed; no connection was rebound');
+    }
+    entry.targetWorktree = targetWorktree;
+    await txn.commit();
+  });
+}
+
+export type AttachmentRecoveryState =
+  | { kind: 'pending'; entry: AttachmentAttempt; record: SeatRecord }
+  | { kind: 'active' | 'retired' | 'cleanup-only' | 'target-missing' };
+
+async function absentAttachmentTarget(target: string): Promise<boolean> {
+  try { await lstat(target); return false; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+}
+
+/** Recovery owns the same flock as reset/finalize; remote callbacks must be bounded
+ * and must not call another seat-store transaction. */
+export async function recoverAttachmentAttempt(input: {
+  attempt: string; origin: string; trustIdentity: string; clientId: string; worktree: string;
+  retire: boolean;
+  expected?: { observation: SeatObservation; targetWorktree?: string };
+  targetAbsent?: (target: string) => Promise<boolean>;
+  reconcile: (entry: AttachmentAttempt, action: ReconcileAttachmentAction) => Promise<ReconcileAttachmentResponse>;
+}): Promise<AttachmentRecoveryState> {
+  return withStore<SeatsFile, AttachmentRecoveryState>(SEATS_FILE, emptyStore, parseStore, async (txn) => {
+    let entry = txn.data.attachments[String(input.attempt)];
+    if (!entry || entry.origin !== input.origin || entry.trustIdentity !== input.trustIdentity || entry.clientId !== input.clientId ||
+        (entry.operation.projectRoot !== input.worktree && entry.targetWorktree !== input.worktree)) {
+      throw new AttachmentAttemptUnavailableError();
+    }
+    const record = txn.data.seats[entry.credentialRef];
+    if (input.expected) {
+      const expected = input.expected.observation;
+      if (input.expected.targetWorktree !== entry.targetWorktree ||
+          (expected.state === 'absent' ? record !== undefined :
+            !record || expected.state !== record.state || expected.digest !== digestOf(record.credential) ||
+            (expected.state === 'active' && expected.droneId !== record.droneId))) {
+        throw new Error('Attachment state changed during recovery consent; nothing was changed');
+      }
+    }
+    const exact = record?.attachmentAttempt === entry.attempt && digestOf(record.credential) === entry.pendingDigest;
+    if (exact && record.state === 'active') {
+      if (input.retire || entry.disposition === 'cleanup-only' || entry.disposition === 'retired') {
+        throw new Error('An active attachment cannot be retired by pending-attachment recovery');
+      }
+      if (entry.disposition !== 'finalized') {
+        // Confirm local durability even after an earlier rename/sync ambiguity.
+        await txn.commit();
+      }
+      // Repeated recovery still checks current parent/grant and terminal state;
+      // a historical local ACTIVE bit is not proof of a live server session.
+      const result = await input.reconcile(entry, 'finalize');
+      if (result.disposition !== 'finalized' || result.drone_id !== record.droneId || result.session_id !== record.sessionId) {
+        throw new Error('Attachment finalization identity did not match the local connection');
+      }
+      if (entry.disposition !== 'finalized') {
+        entry.disposition = 'finalized';
+        await txn.commit();
+      }
+      return { kind: 'active' };
+    }
+    if (exact && record.state === 'pending' && entry.disposition === 'unresolved') {
+      const absentTarget = entry.targetWorktree !== undefined &&
+        await (input.targetAbsent ?? absentAttachmentTarget)(entry.targetWorktree);
+      if (!absentTarget) {
+        if (input.retire) throw new Error('The original pending connection still exists; retry attachment recovery without --retire');
+        // Observed bytes may have survived a failed post-rename sync. Confirm
+        // this exact PREPARE durably before returning a network-capable retry.
+        await txn.commit();
+        return { kind: 'pending', entry, record };
+      }
+      // A reservation-before-add crash and an operator-removed target are
+      // indistinguishable. Neither authorizes silent recreation or default scrub.
+      if (!input.retire) return { kind: 'target-missing' };
+      entry.disposition = 'cleanup-only';
+      delete txn.data.seats[entry.credentialRef];
+      try { await txn.commit(); }
+      catch {
+        const observed = await readStore();
+        const persisted = observed.attachments[String(entry.attempt)];
+        if (observed.seats[entry.credentialRef] || persisted?.disposition !== 'cleanup-only') {
+          throw new Error('Attachment cleanup durability could not be confirmed');
+        }
+        Object.assign(txn.data, observed);
+        entry = txn.data.attachments[String(input.attempt)];
+        await txn.commit();
+      }
+    }
+    if (entry.disposition !== 'retired') {
+      entry.disposition = 'cleanup-only';
+      await txn.commit();
+    }
+    if (!input.retire) {
+      if (entry.disposition !== 'retired') return { kind: 'cleanup-only' };
+      const confirmed = await input.reconcile(entry, 'inspect');
+      if (confirmed.disposition !== 'retired') throw new Error('Attachment retirement could not be confirmed');
+      return { kind: 'retired' };
+    }
+    const result = await input.reconcile(entry, 'retire');
+    if (result.disposition !== 'retired') throw new Error('Attachment retirement could not be confirmed');
+    entry.disposition = 'retired';
+    await txn.commit();
+    return { kind: 'retired' };
+  });
 }
 
 /**
@@ -270,7 +495,10 @@ function repairOrderedDuplicateBindings(store: SeatsFile): void {
     const newest = ordered.reduce((left, right) =>
       left[1].bindingOrder > right[1].bindingOrder ? left : right);
     for (const [ref] of candidates) {
-      if (ref !== newest[0]) delete store.seats[ref];
+      if (ref !== newest[0]) {
+        cleanupAttachment(store, store.seats[ref]);
+        delete store.seats[ref];
+      }
     }
   }
 }
@@ -428,6 +656,7 @@ export type PrepareSeatOutcome =
  */
 export async function prepareSeat(input: {
   expected: SeatExpectation;
+  attachment?: { clientId: string; priorDroneId?: string; targetWorktree?: string };
   /** Default true. When false (a fresh sibling target key that cannot yet hold a
    *  record) the mint runs under the flock but no expectation is revalidated. */
   revalidate?: boolean;
@@ -444,9 +673,35 @@ export async function prepareSeat(input: {
   };
 }): Promise<PrepareSeatOutcome> {
   const { expected, revalidate = true, scrubBeforeMint = false, seed } = input;
+  if (input.attachment && (!UUID_RE.test(input.attachment.clientId) ||
+      (input.attachment.priorDroneId !== undefined && !UUID_RE.test(input.attachment.priorDroneId)))) {
+    throw new Error('Invalid attachment ownership identity');
+  }
   const ref = seatRef(seed);
   const binding = { origin: seed.origin, trustIdentity: seed.trustIdentity, cubeId: seed.cubeId };
   return withStore<SeatsFile, PrepareSeatOutcome>(SEATS_FILE, emptyStore, parseStore, async (txn) => {
+    if (input.attachment) {
+      for (const entry of Object.values(txn.data.attachments)) {
+        if (entry.origin !== seed.origin || entry.trustIdentity !== seed.trustIdentity ||
+            entry.clientId !== input.attachment.clientId || entry.cubeId !== seed.cubeId ||
+            entry.disposition === 'finalized' || entry.disposition === 'retired') continue;
+        const sameOperation = entry.operation.projectRoot === seed.operation.projectRoot &&
+          operationClass(entry.operation, entry.targetWorktree) === operationClass(seed.operation, input.attachment.targetWorktree);
+        const sameTarget = input.attachment.targetWorktree !== undefined && entry.targetWorktree === input.attachment.targetWorktree;
+        const current = txn.data.seats[ref];
+        const activeReuse = !scrubBeforeMint && recordMatches(current, ref, binding) && current.state === 'active' &&
+          current.attachmentAttempt !== undefined &&
+          txn.data.attachments[String(current.attachmentAttempt)].clientId === input.attachment.clientId;
+        const exactRetry = !scrubBeforeMint && current?.attachmentAttempt === entry.attempt &&
+          ref === entry.credentialRef && digestOf(current.credential) === entry.pendingDigest &&
+          entry.roleId === seed.roleId && entry.priorDroneId === input.attachment.priorDroneId &&
+          (entry.disposition === 'unresolved' || entry.disposition === 'ack-pending');
+        if ((sameOperation || sameTarget) && !exactRetry && !activeReuse) throw new AttachmentRecoveryRequiredError(entry.attempt, entry.origin);
+        if (exactRetry && entry.targetWorktree !== undefined && await absentAttachmentTarget(entry.targetWorktree)) {
+          throw new AttachmentRecoveryRequiredError(entry.attempt, entry.origin);
+        }
+      }
+    }
     if (revalidate) {
       const prior = txn.data.seats[ref];
       let mismatch: boolean;
@@ -471,8 +726,20 @@ export async function prepareSeat(input: {
     }
     const existing = txn.data.seats[ref];
     if (recordMatches(existing, ref, binding)) {
+      if (input.attachment && existing.attachmentAttempt !== undefined &&
+          txn.data.attachments[String(existing.attachmentAttempt)].clientId !== input.attachment.clientId) {
+        throw new Error('The saved attachment belongs to a different enrolled client');
+      }
       // Idempotent reuse: re-send the exact bearer the server already digest-bound
       // (a lost-response retry, a crash-in-gap pending, or an active reattach).
+      if (input.attachment && existing.attachmentAttempt === undefined) {
+        await journalPendingAttachment(txn.data, existing, input.attachment);
+      }
+      if (existing.attachmentAttempt !== undefined) {
+        // A previous PREPARE may have renamed successfully and failed sync.
+        // Reusing its bearer still requires confirmed durability before send.
+        await txn.commit();
+      }
       return { ok: true as const, record: existing };
     }
     const record: SeatRecord = {
@@ -485,15 +752,34 @@ export async function prepareSeat(input: {
       state: 'pending',
     };
     txn.data.seats[ref] = record;
+    if (input.attachment) await journalPendingAttachment(txn.data, record, input.attachment);
     await txn.commit();
     rejectedSeatRefs.delete(ref);
     return { ok: true as const, record };
   });
 }
 
+async function journalPendingAttachment(store: SeatsFile, record: SeatRecord,
+  attachment: { clientId: string; priorDroneId?: string; targetWorktree?: string }): Promise<void> {
+  const attempt = randomUUID();
+  if (Object.hasOwn(store.attachments, attempt)) throw new Error('Could not allocate a unique attachment recovery handle');
+  const receipt = await deriveAttachmentReceipt(record.credential);
+  record.attachmentAttempt = attempt;
+  store.attachments[String(attempt)] = {
+    attempt, receipt, origin: record.origin, trustIdentity: record.trustIdentity,
+    clientId: attachment.clientId, cubeId: record.cubeId, roleId: record.roleId,
+    ...(attachment.priorDroneId === undefined ? {} : { priorDroneId: attachment.priorDroneId }),
+    credentialRef: seatRef(record), pendingDigest: digestOf(record.credential), operation: record.operation,
+    ...((attachment.targetWorktree ?? record.worktree) === undefined ? {} : { targetWorktree: attachment.targetWorktree ?? record.worktree }),
+    disposition: record.state === 'active' ? 'ack-pending' : 'unresolved',
+    ...(record.droneId === undefined ? {} : { droneId: record.droneId }),
+    ...(record.sessionId === undefined ? {} : { sessionId: record.sessionId }),
+  };
+}
+
 // ─── FINALIZE (activate + bind in ONE commit) ────────────────────────────────
 
-export type ActivateSeatOutcome = 'activated' | 'missing' | 'replaced';
+export type ActivateSeatOutcome = 'activated' | 'missing' | 'replaced' | 'ack-pending' | 'indeterminate';
 
 /** The worktree binding + display supplied at FINALIZE (known only once the target
  *  worktree is decided). Merged atomically with activation by activateAndBindSeat. */
@@ -536,6 +822,7 @@ export async function activateAndBindSeat(input: {
   roleName?: string;
   roleClass?: 'queen' | 'worker';
   isHumanSeat?: boolean;
+  acknowledge?: (attempt: AttachmentAttempt) => Promise<void>;
 }): Promise<ActivateSeatOutcome> {
   if (!UUID_RE.test(input.droneId) || !UUID_RE.test(input.sessionId)) {
     throw new Error('invalid Borg server session identity');
@@ -546,6 +833,13 @@ export async function activateAndBindSeat(input: {
     const record = txn.data.seats[ref];
     if (!recordMatches(record, ref, binding)) return 'missing';
     if (digestOf(record.credential) !== input.expectedPendingDigest) return 'replaced';
+    const attachment = record.attachmentAttempt === undefined ? undefined : txn.data.attachments[String(record.attachmentAttempt)];
+    if (attachment && (attachment.disposition === 'cleanup-only' || attachment.disposition === 'retired')) return 'replaced';
+    if (attachment?.targetWorktree !== undefined && attachment.targetWorktree !== input.worktree) return 'replaced';
+    if (attachment && record.state === 'active' &&
+        (record.worktree !== input.worktree || record.droneId !== input.droneId || record.sessionId !== input.sessionId)) return 'replaced';
+    if (attachment && Object.entries(txn.data.seats).some(([candidateRef, candidate]) =>
+      candidateRef !== ref && candidate.state === 'active' && candidate.worktree === input.worktree)) return 'replaced';
     const highestOrder = Object.values(txn.data.seats).reduce(
       (highest, candidate) => Math.max(highest, candidate.bindingOrder ?? 0),
       0,
@@ -560,6 +854,7 @@ export async function activateAndBindSeat(input: {
     const retiredRefs: string[] = [];
     for (const [candidateRef, candidate] of Object.entries(txn.data.seats)) {
       if (candidateRef !== ref && candidate.state === 'active' && candidate.worktree === input.worktree) {
+        cleanupAttachment(txn.data, candidate);
         delete txn.data.seats[candidateRef];
         retiredRefs.push(candidateRef);
       }
@@ -579,9 +874,41 @@ export async function activateAndBindSeat(input: {
       ...(input.roleClass !== undefined ? { roleClass: input.roleClass } : {}),
       ...(input.isHumanSeat !== undefined ? { isHumanSeat: input.isHumanSeat } : {}),
     };
-    await txn.commit();
+    if (attachment) {
+      attachment.targetWorktree = input.worktree;
+      attachment.droneId = input.droneId;
+      attachment.sessionId = input.sessionId;
+      if (attachment.disposition !== 'finalized') attachment.disposition = 'ack-pending';
+    }
+    try {
+      await txn.commit();
+    } catch {
+      // A rename can publish ACTIVE before directory sync throws. Observe disk
+      // while retaining this flock; never roll back a potentially live binding.
+      let observed: SeatsFile;
+      try { observed = await readStore(); } catch { return 'indeterminate'; }
+      const actual = observed.seats[ref];
+      if (!actual) return 'missing';
+      if (digestOf(actual.credential) !== input.expectedPendingDigest) return 'replaced';
+      if (actual.state !== 'active' || actual.worktree !== input.worktree ||
+          actual.droneId !== input.droneId || actual.sessionId !== input.sessionId) return 'indeterminate';
+      Object.assign(txn.data, observed);
+      try { await txn.commit(); } catch { return 'indeterminate'; }
+    }
     for (const retiredRef of retiredRefs) rejectedSeatRefs.delete(retiredRef);
     rejectedSeatRefs.delete(ref);
+    const persistedAttachment = record.attachmentAttempt === undefined ? undefined : txn.data.attachments[String(record.attachmentAttempt)];
+    if (persistedAttachment && persistedAttachment.disposition !== 'finalized') {
+      if (!input.acknowledge) return 'ack-pending';
+      try {
+        await input.acknowledge(persistedAttachment);
+        persistedAttachment.disposition = 'finalized';
+        await txn.commit();
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && Object.values(ErrorCode).includes(error.code as ErrorCode)) throw error;
+        return 'ack-pending';
+      }
+    }
     return 'activated';
   });
 }
@@ -631,6 +958,9 @@ export async function bindPendingSeatToWorktree(input: {
     if (record.state !== 'pending' || digestOf(record.credential) !== input.expectedPendingDigest) {
       return 'replaced';
     }
+    const attachment = record.attachmentAttempt === undefined ? undefined : txn.data.attachments[String(record.attachmentAttempt)];
+    if (attachment && (attachment.disposition === 'cleanup-only' || attachment.disposition === 'retired')) return 'replaced';
+    if (attachment?.targetWorktree !== undefined && attachment.targetWorktree !== input.worktree) return 'replaced';
     txn.data.seats[ref] = {
       ...record,
       // state STAYS 'pending' — NOT activated. Only the worktree locator + display
@@ -644,6 +974,7 @@ export async function bindPendingSeatToWorktree(input: {
       ...(input.roleClass !== undefined ? { roleClass: input.roleClass } : {}),
       ...(input.isHumanSeat !== undefined ? { isHumanSeat: input.isHumanSeat } : {}),
     };
+    if (attachment) attachment.targetWorktree = input.worktree;
     await txn.commit();
     return 'bound';
   });
@@ -818,6 +1149,7 @@ export async function resetSeatForWorktree(expected: {
     if (expDigest !== null && digestOf(record.credential) !== expDigest) {
       return { outcome: 'changed' as const };
     }
+    cleanupAttachment(txn.data, record);
     delete txn.data.seats[expected.ref];
     await txn.commit();
     rejectedSeatRefs.delete(expected.ref);
@@ -838,6 +1170,7 @@ export async function scrubPendingSeat(
     const record = txn.data.seats[ref];
     if (!recordMatches(record, ref, binding) || record.state !== 'pending') return false;
     if (digestOf(record.credential) !== expectedPendingDigest) return false;
+    cleanupAttachment(txn.data, record);
     delete txn.data.seats[ref];
     await txn.commit();
     return true;
@@ -849,6 +1182,7 @@ export async function clearSeat(ref: string): Promise<void> {
   if (!REF_RE.test(ref)) throw new Error('invalid Borg server session credential reference');
   await withStore<SeatsFile, void>(SEATS_FILE, emptyStore, parseStore, async (txn) => {
     if (txn.data.seats[ref] !== undefined) {
+      cleanupAttachment(txn.data, txn.data.seats[ref]);
       delete txn.data.seats[ref];
       await txn.commit();
       rejectedSeatRefs.delete(ref);

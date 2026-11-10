@@ -62,12 +62,60 @@ Only an `implicit-sibling:<id>` pending operation is eligible for automatic
 implicit retry adoption. A `named-sibling:<name>` operation remains distinct
 and is never silently adopted by an unnamed sibling launch.
 
-If activation fails and the exact pending record is successfully bound to the
-spawned worktree, Borg preserves that worktree and the printed retry reuses the
-same seat. If the record is missing, replaced, or unavailable, Borg removes the
-spawned worktree and does not print a client retry command: the server may
-already have accepted the seat, and the current protocol has no client-side
-operation identifier or cleanup endpoint that can prove reuse or remove it.
+### Recovering a failed attachment
+
+An attachment connects a drone and its session to a worktree. Before sending an
+attachment request, Borg records a non-secret operation receipt and a local
+attempt UUIDv4 in the same atomic store as its pending bearer. The UUID is an
+independent local lookup handle, never a server retry key or authentication.
+The receipt is not a credential and cannot restore a lost bearer.
+
+After a finalization failure, keep the source and any preserved worktree and run
+the exact printed command from either location:
+
+```text
+borg recover-attachment --host <endpoint> --attempt <uuid>
+```
+
+Recovery reuses only the original stored pending bearer. A completed local bind
+is preserved even if the server acknowledgment is lost; recovery confirms that
+same attachment rather than rolling back the worktree or minting a new drone.
+No agent is launched by this command.
+
+If the original pending record was deleted or replaced, recovery never restores
+it or overwrites its replacement. It instead prints an explicit retirement path:
+
+```text
+borg recover-attachment --host <endpoint> --attempt <uuid> --retire
+```
+
+Retirement requires confirmation (default No); non-interactive use additionally
+requires `--yes`. It retires only the failed, unfinalized operation under the
+current enrolled client's authorization. A cancellation also fences a delayed
+original request. It does not delete preserved worktrees or newer connections.
+An unresolved attempt blocks a fresh attachment for the same logical operation,
+including another unnamed sibling invocation, until recovery resolves it.
+
+If a reserved target is absent (for example, a crash occurred before Git created
+it), the default command preserves the pending credential and offers retirement
+instead of silently recreating that path. Only explicit retirement consent
+allows Borg to scrub that exact still-pending credential, record cleanup intent
+atomically, and retire the operation. The target is checked again after consent;
+an active connection or replacement is never scrubbed by this path.
+
+An attachment already finalized before a later local reset or replacement is
+outside pending-attachment cleanup. Recovery refuses restoration and automatic
+successor creation and asks an operator with cube management access to inspect
+it. Without the exact journal entry, recovery refuses to guess another attempt
+or restore a bearer. If only `seats.json` was lost, surviving parent enrollment
+credentials remain valid, but erased attachment receipts require operator
+cube-management inspection and cleanup. Loss of parent enrollment or authority
+state still requires operator-consented re-enrollment.
+
+If a process died while holding the private-store lock, the existing stale-lock
+refusal names the exact file. Borg does not reclaim it. Only after confirming
+that no Borg process is running may the operator remove that named lock file
+and rerun the identical recovery command. Never delete the credential store.
 
 ## Re-attaching from a terminal
 

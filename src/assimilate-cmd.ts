@@ -173,6 +173,7 @@ export interface AssimilateResult {
   role_id: string;
   local_session?: {
     credential_ref: string;
+    attachment_attempt?: string;
   };
   // Idempotent-reattach discriminant: 'reused' when the server resolved the
   // client bearer to an existing seat, 'created' on a first/fresh attach.
@@ -189,6 +190,7 @@ export interface AssimilateResult {
     // pending operation and re-sends the identical bearer. Absent for the (severed)
     // unit stubs that fully mock `assimilate`.
     bindPending?: (binding: SeatBinding) => Promise<unknown>;
+    reserveTarget?: (target: string, failedCollisionTarget?: string) => Promise<void>;
   };
   // CR #1: set when the cube-lock-held PREPARE revalidation aborted BEFORE any
   // credential was minted or sent (a reset/binding writer won before PREPARE).
@@ -379,7 +381,7 @@ export interface AssimilateDeps {
   assimilate: (
     apiUrl: string,
     token: string,
-    params: { cube_id: string; role_id: string; hostname?: string | null; prior_drone_id?: string; remint_invalid_prior?: boolean; model?: string | null; agent_kind?: 'claude' | 'codex' | 'opencode' | null; working_repo?: WorkingRepo; session_operation?: ServerSessionOperation; session_expected?: ExpectedBinding; revalidate_at_prepare?: boolean },
+    params: { cube_id: string; role_id: string; hostname?: string | null; prior_drone_id?: string; remint_invalid_prior?: boolean; model?: string | null; agent_kind?: 'claude' | 'codex' | 'opencode' | null; working_repo?: WorkingRepo; session_operation?: ServerSessionOperation; session_expected?: ExpectedBinding; revalidate_at_prepare?: boolean; session_target_worktree?: string },
     serverTrustIdentity?: string,
   ) => Promise<AssimilateResult>;
 
@@ -881,6 +883,10 @@ export async function finalizeAssimilationSeat(
       scrubPending: result.finalize.scrubPending,
     });
   } catch (error) {
+    if (result.local_session?.attachment_attempt !== undefined) {
+      deps.stderr(`Finalization could not be confirmed. The worktree was preserved. Run: borg recover-attachment --host ${shellEscape(apiUrl)} --attempt ${result.local_session.attachment_attempt}\n`);
+      return { kind: 'stop', code: 1 };
+    }
     const message = error instanceof Error ? error.message : String(error);
     deps.stderr(`finalizeServerSeat failed: ${message}\n`);
     rollbackWorktree();
@@ -888,6 +894,21 @@ export async function finalizeAssimilationSeat(
   }
 
   if (outcome.committed) return continueAssimilation(undefined);
+
+  if (result.local_session?.attachment_attempt !== undefined) {
+    const command = `borg recover-attachment --host ${shellEscape(apiUrl)} --attempt ${result.local_session.attachment_attempt}`;
+    if (outcome.reason === 'ack-pending' && outcome.refusal !== undefined) {
+      deps.stderr(`Attachment finalization was refused (${outcome.refusal}); the local connection and worktree were preserved. Run: ${command}\n`);
+      return { kind: 'stop', code: 1 };
+    }
+    deps.stderr(`The worktree was preserved, but attachment finalization could not be confirmed. Run: ${command}\n`);
+    return { kind: 'stop', code: 1 };
+  }
+
+  if (outcome.reason === 'ack-pending') {
+    deps.stderr('The local connection and worktree were preserved, but finalization could not be confirmed.\n');
+    return { kind: 'stop', code: 1 };
+  }
 
   if (outcome.reason === 'activation-failed') {
     let bindOutcome: BindPendingSeatOutcome | 'threw' | 'unavailable' = 'unavailable';
@@ -1215,6 +1236,7 @@ export type SeatPreparationDeps = Pick<
 >;
 
 export interface SeatPreparationInput {
+  targetWorktree?: string;
   apiUrl: string;
   token: string;
   serverTrustIdentity: string;
@@ -1300,6 +1322,7 @@ export async function prepareAssimilationSeat(
         ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
         ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
         session_operation: sessionOperation,
+        ...(input.targetWorktree === undefined ? {} : { session_target_worktree: input.targetWorktree }),
         session_expected: sessionExpected,
         revalidate_at_prepare: true,
       },
@@ -1356,6 +1379,7 @@ export type WorktreePreparationDeps = Pick<
 >;
 
 export interface WorktreePreparationInput {
+  reserveTarget?: (target: string, failedCollisionTarget?: string) => Promise<void>;
   flags: AssimilateFlags;
   repositoryContext: GitRepositoryContext;
   projectRoot: string;
@@ -1439,7 +1463,13 @@ export async function prepareAssimilationWorktree(
 
   let worktreeResult: ReturnType<AssimilateDeps['runSync']>;
   let residualBranch: string | null = null;
+  let failedCollisionTarget: string | undefined;
   while (true) {
+    try { await input.reserveTarget?.(candidate, failedCollisionTarget); }
+    catch {
+      deps.stderr('The attachment target could not be reserved; no worktree was created. Use the printed attachment recovery command.\n');
+      return { kind: 'stop', code: 1 };
+    }
     deps.mkdirp(dirname(candidate));
     const branchExisted = localBranchExists(deps.runSync, projectRoot, worktreeBranch);
     worktreeResult = branchExisted
@@ -1459,6 +1489,9 @@ export async function prepareAssimilationWorktree(
       break;
     }
     registeredWorktrees = refreshed;
+    // Only this immediate failed-add loop can advance its own reservation.
+    // Previously reserved recovery targets never enter this creation loop.
+    failedCollisionTarget = candidate;
     do {
       candidate = computeWorktreePath(homeDir, repoBase, suffix, suffixNumber);
       worktreeBranch = perWorktreeBranchName(basename(candidate), repoBase);
@@ -2240,6 +2273,7 @@ async function runAssimilationFlow(
   const effectiveModel = 'effectiveModel' in cubeRole.value ? cubeRole.value.effectiveModel as string | null : null;
 
   const seat = await prepareAssimilationSeat({
+    targetWorktree: wantSibling ? undefined : projectRoot,
     apiUrl: auth.apiUrl,
     token: auth.token,
     serverTrustIdentity: auth.serverTrustIdentity,
@@ -2261,6 +2295,7 @@ async function runAssimilationFlow(
   validateConnectionRole?.(assignedRole);
 
   const worktree = await prepareAssimilationWorktree({
+    reserveTarget: result.finalize?.reserveTarget,
     flags: args.flags,
     repositoryContext,
     projectRoot,
@@ -2269,7 +2304,12 @@ async function runAssimilationFlow(
     assignedRole,
     existing,
   }, deps);
-  if (worktree.kind === 'stop') return worktree.code;
+  if (worktree.kind === 'stop') {
+    if (result.local_session?.attachment_attempt !== undefined) {
+      deps.stderr(`The attachment remains recoverable from this source worktree. Run: borg recover-attachment --host ${shellEscape(auth.apiUrl)} --attempt ${result.local_session.attachment_attempt}\n`);
+    }
+    return worktree.code;
+  }
   const { spawnedWorktreePath } = worktree.value;
 
   // ----- Step 7b: provision launch access before persisting/launching -----
@@ -2308,6 +2348,10 @@ async function runAssimilationFlow(
 
   const rollbackWorktree = (): void => {
     if (!spawnedWorktreePath) return;
+    if (result.local_session?.attachment_attempt !== undefined) {
+      deps.stderr(`The accepted attachment's worktree was preserved. Run: borg recover-attachment --host ${shellEscape(auth.apiUrl)} --attempt ${result.local_session.attachment_attempt}\n`);
+      return;
+    }
     const rm = deps.runSync('git', ['worktree', 'remove', '--force', spawnedWorktreePath], projectRoot);
     if (rm.status === 0) {
       deps.stderr(`rolled back spawned worktree at ${spawnedWorktreePath}\n`);
@@ -2330,7 +2374,9 @@ async function runAssimilationFlow(
       const message = err instanceof Error ? err.message : String(err);
       deps.stderr(
         `Borg could not save the ${cli} preference for sibling worktree ${spawnedWorktreePath}: ${message}. ` +
-          'The worktree was removed; correct the local configuration and retry.\n',
+          (result.local_session?.attachment_attempt !== undefined
+            ? 'Correct the local configuration, then use the printed attachment recovery command.\n'
+            : 'The worktree was removed; correct the local configuration and retry.\n'),
       );
       rollbackWorktree();
       return 1;

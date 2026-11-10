@@ -13,7 +13,7 @@ export function installConsumerPackages(consumer, packages) {
 export async function installTestServer(directory) {
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, 'package.json'), '{"name":"borg-wake-e2e","private":true}\n');
-  installConsumerPackages(directory, ['borgmcp-server@4.1.0']);
+  installConsumerPackages(directory, ['borgmcp-server@5.0.0']);
   return join(directory, 'node_modules', 'borgmcp-server');
 }
 

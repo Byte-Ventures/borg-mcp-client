@@ -195,6 +195,7 @@ export function clientSubcommandHelpText(command, args, version) {
         case 'quickstart': return quickstartHelpText(version);
         case 'reset-local-connection': return resetLocalSeatHelpText(version);
         case 'recover-enrollment': return recoverEnrollmentHelpText(version);
+        case 'recover-attachment': return recoverAttachmentHelpText(version);
         case 'cleanup': return cleanupHelpText(version);
         case 'drones': return seatsHelpText(version);
         case 'launch': return launchSeatHelpText(version);
@@ -240,6 +241,7 @@ export function topLevelHelpText(version) {
         `  borg server cube init    Initialize this repository's cube without creating a drone\n` +
         `  borg reset-local-connection  Clear ONLY this worktree's saved connection to its cube (offline; after a rejection)\n` +
         `  borg recover-enrollment  Restore or clear ONLY one failed server enrollment transaction\n` +
+        `  borg recover-attachment  Reuse or explicitly retire one failed attachment; never launches an agent\n` +
         `  borg cleanup [--prune]   Report (or --prune) worktrees orphaned by evicted drones\n` +
         `  borg drones              List this machine's registered drones and worktrees\n` +
         `  borg launch <drone-label-or-id-prefix>  Reopen one registered drone from its worktree\n` +
@@ -249,6 +251,21 @@ export function topLevelHelpText(version) {
         `  borg --cli claude|codex|opencode  Launch that agent CLI directly\n` +
         `  borg --version           Show installed version\n\n` +
         `All other arguments are passed through to the selected agent CLI.\n`);
+}
+export function recoverAttachmentHelpText(version) {
+    return `borg recover-attachment (borgmcp ${version}) — recover one failed attachment\n\n` +
+        'A drone is an agent identity; a cube groups drones that coordinate together.\n' +
+        'An attachment connects a server-side drone and its session to a repository worktree.\n' +
+        'Run the command printed after failure from the surviving source or preserved worktree:\n' +
+        '  borg recover-attachment --host <endpoint> --attempt <uuid> [--retire [--yes]]\n\n' +
+        'The attempt is a random local UUIDv4 journal handle, not a credential or server retry key.\n' +
+        'Recovery reuses only the original\n' +
+        'stored bearer. A missing/replaced bearer can only be explicitly retired, never restored.\n' +
+        'Retirement confirms [y/N]; non-interactive use requires --retire --yes. No agent is launched\n' +
+        'and preserved worktrees and newer connections are not removed or overwritten.\n' +
+        'An already finalized attachment whose local connection was later reset requires operator\n' +
+        'management cleanup. A lost journal cannot be recovered or guessed from another handle.\n' +
+        'Loss of parent enrollment/authority state still requires operator re-enrollment.\n';
 }
 export function recoverEnrollmentHelpText(version) {
     return (`borg recover-enrollment (borgmcp ${version}) — restore or clear one failed server enrollment\n\n` +
