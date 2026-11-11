@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile, symlink, access } from 'node:fs/promises';
+import { mkdir, readFile, realpath, writeFile, symlink, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import fsPromises from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
+import { assertPublishedRecoveryClient } from '../support/published-recovery-client.mjs';
 
 if (process.env.BORG_E2E !== '1' || process.env.CI !== 'true' || process.platform !== 'linux') {
   throw new Error('Attachment fault/recovery execution is restricted to opt-in Linux CI');
@@ -14,7 +15,8 @@ if (process.env.BORG_E2E !== '1' || process.env.CI !== 'true' || process.platfor
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const input = JSON.parse(Buffer.concat(chunks).toString());
-const load = name => import(pathToFileURL(join(input.clientRoot, 'dist', name)).href);
+const client = await assertPublishedRecoveryClient(input.clientRoot, input.clientConsumer);
+const load = name => import(pathToFileURL(join(client.root, 'dist', name)).href);
 const [seats, handshake, config, { loadBorgServerTrust }, { resolveGitRepositoryContext }, { finalizeAssimilationSeat }] = await Promise.all([
   load('seats.js'), load('server-handshake.js'), load('config.js'), load('server-trust.js'),
   load('repository-identity.js'), load('assimilate-cmd.js'),
@@ -24,8 +26,10 @@ const parent = await config.getServerCredentialRecord(input.origin, trust.identi
 assert.ok(parent?.clientId);
 const bin = join(process.env.BORG_STATE_ROOT, 'journey-bin');
 await mkdir(bin, { recursive: true });
-try { await symlink(join(input.clientRoot, 'dist/claude.js'), join(bin, 'borg')); }
+try { await symlink(join(client.root, 'dist/claude.js'), join(bin, 'borg')); }
 catch (error) { if (error.code !== 'EEXIST') throw error; }
+assert.equal(await realpath(join(bin, 'borg')), await realpath(join(client.root, 'dist/claude.js')),
+  'Printed recovery commands must execute the installed public entrypoint');
 const agentAttempt = join(process.env.BORG_STATE_ROOT, 'unexpected-recovery-agent-invocation');
 for (const name of ['claude', 'codex', 'opencode']) {
   await writeFile(join(bin, name), '#!/bin/sh\nprintf "%s\\n" "$0" >> "$RECOVERY_AGENT_ATTEMPT_FILE"\nexit 99\n', { mode: 0o755 });
@@ -59,14 +63,14 @@ if (input.mode === 'crash-refusal' || input.mode === 'crash-retry') {
     assert.ok(result.stderr.includes(lock), 'Product names the exact disposable lock for manual remediation');
     assert.equal(await readFile(seats.SEATS_FILE, 'utf8'), before);
     assert.equal(await readFile(lock, 'utf8'), lockBefore);
-    console.log(JSON.stringify({ crashRefused: true, lockPath: lock }));
+    console.log(JSON.stringify({ crashRefused: true, lockPath: lock, client }));
   } else {
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /original drone and session were reused/);
     const entry = await seats.readAttachmentAttempt({ attempt: input.attempt, origin: input.origin,
       trustIdentity: trust.identity, clientId: parent.clientId, worktree: input.source });
     assert.deepEqual(await inspect(entry), { disposition: 'finalized', drone_id: input.droneId, session_id: input.sessionId });
-    console.log(JSON.stringify({ crashRecovered: true, droneId: input.droneId, sessionId: input.sessionId }));
+    console.log(JSON.stringify({ crashRecovered: true, droneId: input.droneId, sessionId: input.sessionId, client }));
   }
   await assert.rejects(access(agentAttempt), 'Recovery must not invoke an installed agent CLI');
   process.exit(0);
@@ -166,7 +170,7 @@ for (const scenario of input.mode === 'crash-prepare' ? ['crash'] : ['reuse', 'u
   const command = printed.match(/Run: (borg recover-attachment[^\n]+)/)?.[1];
   assert.ok(command, 'Execute the real finalizer-printed command, never a reconstructed command');
   if (scenario === 'crash') {
-    console.log(JSON.stringify({ command, source, attempt, droneId: prepared.drone.id, sessionId: prepared.session.sessionId }));
+    console.log(JSON.stringify({ command, source, attempt, droneId: prepared.drone.id, sessionId: prepared.session.sessionId, client }));
     process.exit(0);
   }
   const before = await readFile(seats.SEATS_FILE, 'utf8');
@@ -225,4 +229,4 @@ for (const scenario of input.mode === 'crash-prepare' ? ['crash'] : ['reuse', 'u
   observations.push({ scenario, bindOutcome, droneId: prepared.drone.id, recovered: true });
 }
 await assert.rejects(access(agentAttempt), 'Recovery must not invoke an installed agent CLI');
-console.log(JSON.stringify({ attachmentRecovery: observations }));
+console.log(JSON.stringify({ attachmentRecovery: observations, client }));

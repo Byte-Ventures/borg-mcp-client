@@ -14,6 +14,7 @@ import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createProtocolEnvelope } from 'borgmcp-shared/protocol';
 import { installTestServer, openRealServer } from '../../test/support/real-server.mjs';
 import { fakeCodex, fakeOpenCode } from '../../test/support/fake-agents.mjs';
+import { assertPublishedRecoveryClient, installPublishedRecoveryClient } from '../../test/support/published-recovery-client.mjs';
 
 const enabled = process.env.BORG_E2E === '1';
 if (process.env.CI === 'true' && process.env.OPENCODE_TEST_V2_BINARY && !enabled) {
@@ -80,6 +81,9 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
   };
   try {
     const serverRoot = await installTestServer(join(temporary, 'consumer'));
+    const recoveryConsumer = join(temporary, 'public-recovery-consumer');
+    const recoveryClientRoot = await installPublishedRecoveryClient(recoveryConsumer);
+    await expect(assertPublishedRecoveryClient(root, recoveryConsumer)).rejects.toThrow('not the source checkout');
     const data = join(temporary, 'server');
     let owner: any;
     const setup = await openRealServer(serverRoot, data, async (record: any) => { owner = record; });
@@ -294,7 +298,8 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     await mkdir(join(recoveryHome, 'tmp'), { recursive: true });
     const recoveryEnv = { ...process.env, HOME: recoveryHome, BORG_STATE_ROOT: recoveryHome, BORG_SERVER_DATA_DIR: data,
       XDG_CONFIG_HOME: join(recoveryHome, '.config'), TMPDIR: join(recoveryHome, 'tmp') };
-    const recoveryInput = { clientRoot: root, origin: recoveryOrigin, name: 'attachment-recovery', worktree: recoveryWorktree,
+    const recoveryInput = { clientRoot: recoveryClientRoot, clientConsumer: recoveryConsumer,
+      origin: recoveryOrigin, name: 'attachment-recovery', worktree: recoveryWorktree,
       cubeId: cube.cube_id, roleId: cube.default_worker_role_id };
     const recoveryEnrollment = JSON.parse(await run([join(root, 'test/support/provision-wake-seat.mjs')], recoveryEnv,
       { ...recoveryInput, mode: 'enroll', invitation: invitations[10] }));
@@ -302,7 +307,8 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     const recovery = JSON.parse(await run([join(root, 'test/fixtures/attachment-recovery-journey.mjs')], recoveryEnv, recoveryInput));
     expect(recovery.attachmentRecovery.map((row: any) => row.scenario)).toEqual(['reuse', 'unreserved-sibling', 'after-rename', 'ack-loss', 'missing', 'replaced', 'reserved-target-absent']);
     expect(recovery.attachmentRecovery.every((row: any) => row.recovered)).toBe(true);
-    console.log(JSON.stringify(recovery));
+    expect(recovery.client).toMatchObject({ source: 'installed-public', root: recoveryClientRoot, version: '8.0.0' });
+    console.log(JSON.stringify({ ...recovery, fleetClient: { source: 'checkout-built', root } }));
     if (process.env.OPENCODE_TEST_V2_BINARY) {
       // Extend the existing real-server fleet gate: replace one V1 endpoint
       // with the published native V2 host and its actual Borg MCP child.
@@ -350,7 +356,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       child.on('close', code => code === 0 ? resolve(output) : reject(new Error('Could not enumerate CI processes before lock remediation')));
     });
     const borgEntrypoints: string[] = [];
-    for (const packageRoot of [root, serverRoot]) {
+    for (const packageRoot of [root, recoveryClientRoot, serverRoot]) {
       const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
       for (const [name, entry] of Object.entries(manifest.bin as Record<string, string>)) {
         borgEntrypoints.push(name, entry.replace(/^\.\//, ''));
@@ -377,7 +383,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     }, 'same isolated authority after explicit lock remediation');
     expect(await readFile(join(data, 'ca.crt'))).toEqual(ca);
     const recovered = JSON.parse(await run([journeyFixture], recoveryEnv, { ...recoveryInput, ...crash, mode: 'crash-retry' }));
-    expect(recovered).toEqual({ crashRecovered: true, droneId: crash.droneId, sessionId: crash.sessionId });
+    expect(recovered).toEqual({ crashRecovered: true, droneId: crash.droneId, sessionId: crash.sessionId, client: recovery.client });
     console.log(JSON.stringify({ attachmentCrashRecovery: { staleRefusal: true, machineBorgProcesses: 0,
       sameAuthority: true, sameCommand: true, ...recovered } }));
   } finally {
